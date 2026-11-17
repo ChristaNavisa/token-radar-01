@@ -10,19 +10,26 @@
 // Implied value follows only from the snapshot's own figures, and no protocol name is ever
 // special-cased: the same function scores every row.
 //
-//   category multiple = the median market-cap-to-TVL ratio of the live-token protocols in the
-//                       protocol's own category, computed from this snapshot at run time,
-//                       clamped to [0.05, 1.00]. A category with fewer than three live protocols
-//                       to learn from falls back to the global median across all live protocols.
-//                       The starter priced every category at one flat 0.25x; the market does not:
-//                       on this snapshot the live medians run from 0.025x (Restaking) to 1.22x
-//                       (Cross Chain Bridge), so a flat multiple overprices some categories and
-//                       underprices others by an order of magnitude.
+//   category multiple = the category's median market-cap-to-TVL ratio, shrunk toward the
+//                       global median with a pseudo-count of 3: (n x category median + 3 x
+//                       global median) / (n + 3). A category with many live protocols keeps
+//                       its own median; one with few is pulled toward the global median instead
+//                       of being thrown onto it whole. The starter priced every category at one
+//                       flat 0.25x; the market does not: on this snapshot the live medians run
+//                       from 0.025x (Restaking) to 1.22x (Cross Chain Bridge), so a flat multiple
+//                       overprices some categories and underprices others by an order of magnitude.
 //   base              = tvl_usd x category multiple
-//   growth            = clamp(change_7d, -60, 120) per cent
-//   growthMult        = 1 + (growth / 100) x GROWTH_WEIGHT
+//   growth            = clamp(change_7d, -60, 120) per cent, dampened on a log scale so one hot
+//                       week cannot dominate the ranking
+//   growthMult        = 1 + 0.5 x sign(growth) x ln(1 + |growth| / 100)
 //   maturity          = 0.6 + min(age_days, 1095) / 1095 x 0.4   (age_days unknown: 365)
 //   implied           = max(1, round(base x growthMult x maturity))
+//
+//   The model is checked, not just asserted: a leave-one-out test scores the 128 live-token
+//   protocols as if each had no token (its own ratio left out of its category's multiple) and
+//   compares the predicted value with the market cap it actually trades at. The board is a
+//   ranking, so the test is a ranking test: Spearman rho between predicted and actual value,
+//   and how many of the actually most valuable protocols land in the model's top decile.
 //
 // Age is the time since DefiLlama first listed the protocol: the best record of how long it has
 // run with no token. A protocol that has run for years at scale with no token, and is still
@@ -62,7 +69,8 @@ export interface ModelConstants {
   unknown_age_days: number;
   multiple_floor: number;
   multiple_cap: number;
-  multiple_min_samples: number;
+  /** The pseudo-count that shrinks a category's multiple toward the global median. */
+  shrink_k: number;
 }
 
 export const MODEL: ModelConstants = {
@@ -75,11 +83,11 @@ export const MODEL: ModelConstants = {
   unknown_age_days: 365,
   multiple_floor: 0.05,
   multiple_cap: 1.0,
-  multiple_min_samples: 3,
+  shrink_k: 3,
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-2';
+export const MODEL_VERSION = 'radar-3';
 
 /** How many pre-token protocols below the watchlist floor the early radar carries, by TVL. */
 export const EARLY_ROWS = 260;
@@ -139,6 +147,8 @@ export interface RadarRow {
   growth_multiplier: number;
   maturity_multiplier: number;
   watchlist: boolean;
+  /** The row's rank among the board's rows in its own category (1 is the category's best). */
+  category_rank: number;
 }
 
 /** A live-token protocol: it already trades, so the board shows the market's own value, not a model's. */
@@ -152,11 +162,29 @@ export interface LiveRow {
   change_7d: number | null;
 }
 
-/** One category's learned multiple: the median mcap/TVL of its live protocols. */
+/** One category's learned multiple: its median mcap/TVL, shrunk toward the global median. */
 export interface CategoryMultiple {
   multiple: number;
   samples: number;
   fallback: boolean;
+  /** The share of the multiple that comes from the category's own live protocols (n / (n + k)). */
+  learned_share: number;
+}
+
+/** The leave-one-out check of the model on the protocols whose token already trades. */
+export interface Calibration {
+  /** How many live-token protocols the check scored. */
+  n: number;
+  /** Spearman rho between the model's predicted value and the actual market cap. */
+  spearman: number;
+  /** How many of the actually most valuable live protocols land in the model's top decile. */
+  top_decile_hit: number;
+  /** How many protocols the top decile holds (a tenth of n, at least 1). */
+  top_decile_total: number;
+  /** The median of predicted value over actual market cap across the checked protocols. */
+  median_ratio: number;
+  /** The share of checked protocols whose predicted value lands within twice the actual one. */
+  within_2x: number;
 }
 
 /** Everything the dashboard needs: the board, the live set, and the model it runs. */
@@ -172,6 +200,7 @@ export interface RadarData {
   live_size: number;
   category_multiples: Record<string, CategoryMultiple>;
   global_multiple: number;
+  calibration: Calibration;
   rows: RadarRow[];
   live: LiveRow[];
 }
@@ -210,8 +239,9 @@ export function ageDays(asOf: string, listedAt: string | null): number | null {
 
 /**
  * The category multiples the snapshot itself teaches: for each category, the median
- * market-cap-to-TVL ratio of its live-token protocols, clamped to the model's band. A category
- * with too few live protocols to learn from takes the global median instead, marked fallback.
+ * market-cap-to-TVL ratio of its live-token protocols, shrunk toward the global median
+ * with a pseudo-count of `model.shrink_k`. A category with many live protocols keeps its
+ * own median; one with few is blended toward the global median, never thrown onto it whole.
  */
 export function categoryMultiples(snapshot: Snapshot, model: ModelConstants = MODEL): { byCategory: Record<string, CategoryMultiple>; global: number } {
   const ratiosByCategory = new Map<string, number[]>();
@@ -229,11 +259,10 @@ export function categoryMultiples(snapshot: Snapshot, model: ModelConstants = MO
   const global = clamp(median(allRatios));
   const byCategory: Record<string, CategoryMultiple> = {};
   for (const [category, ratios] of ratiosByCategory) {
-    if (ratios.length >= model.multiple_min_samples) {
-      byCategory[category] = { multiple: clamp(median(ratios)), samples: ratios.length, fallback: false };
-    } else {
-      byCategory[category] = { multiple: global, samples: ratios.length, fallback: true };
-    }
+    const n = ratios.length;
+    const catMedian = clamp(median(ratios));
+    const multiple = (n * catMedian + model.shrink_k * global) / (n + model.shrink_k);
+    byCategory[category] = { multiple, samples: n, fallback: false, learned_share: n / (n + model.shrink_k) };
   }
   return { byCategory, global };
 }
@@ -242,7 +271,7 @@ export function categoryMultiples(snapshot: Snapshot, model: ModelConstants = MO
 export function multipleFor(p: SnapshotProtocol, multiples: { byCategory: Record<string, CategoryMultiple>; global: number }): CategoryMultiple {
   const entry = multiples.byCategory[p.category ?? 'Other'];
   if (entry !== undefined) return entry;
-  return { multiple: multiples.global, samples: 0, fallback: true };
+  return { multiple: multiples.global, samples: 0, fallback: true, learned_share: 0 };
 }
 
 /** The multipliers and the implied value one protocol gets under `model`. */
@@ -256,12 +285,93 @@ export function impliedValue(
   const { multiple, samples } = multipleFor(protocol, multiples);
   const rawGrowth = finite(protocol.change_7d, 0);
   const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, rawGrowth));
-  const growthMult = 1 + (growthPct / 100) * model.growth_weight;
+  // Log-dampened growth: a hot week moves the value, but one week's move cannot dominate the
+  // ranking. A +120% week is worth 1.39x here, not the 1.60x a linear term would give it.
+  const growthMult = 1 + model.growth_weight * Math.sign(growthPct) * Math.log1p(Math.abs(growthPct) / 100);
   const ageForModel = age ?? model.unknown_age_days;
   const maturityMult = model.maturity_floor + (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
   const base = protocol.tvl_usd * multiple;
   const implied = Math.max(1, Math.round(base * growthMult * maturityMult));
   return { implied, multiple, samples, growthPct, growthMult, maturityMult, age };
+}
+
+/** Ranks with ties averaged, 1-based. */
+function ranks(values: number[]): number[] {
+  const order = values.map((v, i) => ({ v, i })).sort((a, b) => a.v - b.v);
+  const out = new Array<number>(values.length);
+  let i = 0;
+  while (i < order.length) {
+    let j = i;
+    while (j + 1 < order.length && order[j + 1]!.v === order[i]!.v) j++;
+    const avg = (i + j) / 2 + 1;
+    for (let t = i; t <= j; t++) out[order[t]!.i] = avg;
+    i = j + 1;
+  }
+  return out;
+}
+
+/** Spearman rho between two lists of numbers, ties averaged. */
+export function spearman(xs: number[], ys: number[]): number {
+  if (xs.length < 2 || xs.length !== ys.length) return 0;
+  const rx = ranks(xs);
+  const ry = ranks(ys);
+  const mx = rx.reduce((a, b) => a + b, 0) / rx.length;
+  const my = ry.reduce((a, b) => a + b, 0) / ry.length;
+  let cov = 0;
+  let vx = 0;
+  let vy = 0;
+  for (let i = 0; i < rx.length; i++) {
+    cov += (rx[i]! - mx) * (ry[i]! - my);
+    vx += (rx[i]! - mx) ** 2;
+    vy += (ry[i]! - my) ** 2;
+  }
+  if (vx === 0 || vy === 0) return 0;
+  return cov / Math.sqrt(vx * vy);
+}
+
+/**
+ * The leave-one-out check of the model on the protocols whose token already trades. Each live
+ * protocol is scored as if it had no token — its own ratio left out of its category's multiple
+ * and of the global median — and the predicted value is compared with the market cap it actually
+ * trades at. The board is a ranking, so the check is a ranking check first: Spearman rho between
+ * predicted and actual value, and how many of the actually most valuable protocols land in the
+ * model's top decile. The point stats (median ratio, share within twice the actual value) are
+ * reported beside them, not instead of them: a market cap can sit far from its category's median,
+ * and that dispersion is why the board is a ranking, not a price list.
+ */
+export function calibrate(snapshot: Snapshot, model: ModelConstants = MODEL): Calibration {
+  const live = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
+  const predicted: number[] = [];
+  const actual: number[] = [];
+  for (const p of live) {
+    const rest: Snapshot = { ...snapshot, protocols: snapshot.protocols.filter((q) => q.slug !== p.slug) };
+    const multiples = categoryMultiples(rest, model);
+    const v = impliedValue(p, snapshot.as_of, multiples, model);
+    predicted.push(v.implied);
+    actual.push(p.mcap_usd!);
+  }
+  const n = live.length;
+  if (n === 0) return { n: 0, spearman: 0, top_decile_hit: 0, top_decile_total: 0, median_ratio: 0, within_2x: 0 };
+  const rho = spearman(predicted, actual);
+  const decile = Math.max(1, Math.round(n / 10));
+  const topActual = new Set(
+    actual.map((v, i) => ({ v, i })).sort((a, b) => b.v - a.v).slice(0, decile).map((x) => x.i),
+  );
+  const topPredicted = new Set(
+    predicted.map((v, i) => ({ v, i })).sort((a, b) => b.v - a.v).slice(0, decile).map((x) => x.i),
+  );
+  let hit = 0;
+  for (const i of topActual) if (topPredicted.has(i)) hit++;
+  const ratios = predicted.map((p, i) => p / actual[i]!);
+  const within2x = ratios.filter((r) => r >= 0.5 && r <= 2).length / n;
+  return {
+    n,
+    spearman: Math.round(rho * 1000) / 1000,
+    top_decile_hit: hit,
+    top_decile_total: decile,
+    median_ratio: Math.round(median(ratios) * 100) / 100,
+    within_2x: Math.round(within2x * 1000) / 1000,
+  };
 }
 
 /** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
@@ -401,10 +511,12 @@ function weeklyActionFor(p: SnapshotProtocol): string {
 }
 
 /**
- * A protocol's farm plan: seven steps, each an action with a cost and a time. The plan is derived
+ * A protocol's farm plan: eight steps, each an action with a cost and a time. The plan is derived
  * from the protocol's own record (category, chains, TVL, age), never from a hand-written list of
  * names. Every step names what it costs and how long it takes, so the plan is a checklist, not a
- * slogan.
+ * slogan. A protocol on two or more chains gets a second-chain repeat in its weekly step, and
+ * every plan ends with a launch watch: the token, when it comes, is announced on the protocol's
+ * own page, and that is the only place to read it.
  */
 export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
   const chain = chainOf(p);
@@ -424,7 +536,9 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
       time: '15 minutes to set up',
     },
     {
-      text: `Make one qualifying action each week, such as ${weekly}, so the wallet shows repeat activity.`,
+      text: p.chains.length >= 2
+        ? `Make one qualifying action each week on ${chain}, such as ${weekly}, and once a month repeat the core action on ${p.chains[1]}, so the wallet shows repeat activity on both chains.`
+        : `Make one qualifying action each week, such as ${weekly}, so the wallet shows repeat activity.`,
       cost: 'about $2 of gas a week',
       time: '10 minutes a week',
     },
@@ -437,6 +551,11 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
       text: `Once a month, check ${p.name}'s own points or rewards page for a snapshot date and write it in your farm log.`,
       cost: 'no fee to check',
       time: '10 minutes a month',
+    },
+    {
+      text: `Set a monthly reminder to check whether ${p.name} has announced a token or a points program, and read the announcement on the protocol's own page.`,
+      cost: 'no fee to check',
+      time: '5 minutes a month',
     },
     {
       text: `Before you withdraw, open the protocol's own points or rewards page and claim only from the link it publishes.`,
@@ -469,7 +588,7 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
 }
 
 /** A board row's compact form for data.js, with the farm plan generated in the page. */
-export function radarRow(row: BoardRow, watchlist: Set<string>): RadarRow {
+export function radarRow(row: BoardRow, watchlist: Set<string>, categoryRank: number): RadarRow {
   return {
     rank: row.rank,
     slug: row.slug,
@@ -487,6 +606,7 @@ export function radarRow(row: BoardRow, watchlist: Set<string>): RadarRow {
     growth_multiplier: row.model.growth_multiplier,
     maturity_multiplier: row.model.maturity_multiplier,
     watchlist: watchlist.has(row.slug),
+    category_rank: categoryRank,
   };
 }
 
@@ -497,6 +617,16 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
   const live = liveRows(snapshot);
   const watchlist = new Set(snapshot.watchlist);
   const early = board.filter((r) => !watchlist.has(r.slug)).length;
+  // The category rank: the board is sorted by implied value, so the first row of a category
+  // seen in that order is the category's best, the next its second, and so on.
+  const seenByCategory = new Map<string, number>();
+  const categoryRank = new Map<string, number>();
+  for (const r of board) {
+    const key = r.category ?? 'Other';
+    const n = (seenByCategory.get(key) ?? 0) + 1;
+    seenByCategory.set(key, n);
+    categoryRank.set(r.slug, n);
+  }
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
@@ -509,7 +639,8 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     live_size: live.length,
     category_multiples: multiples.byCategory,
     global_multiple: multiples.global,
-    rows: board.map((r) => radarRow(r, watchlist)),
+    calibration: calibrate(snapshot, model),
+    rows: board.map((r) => radarRow(r, watchlist, categoryRank.get(r.slug) ?? 1)),
     live,
   };
   return { board, radar };

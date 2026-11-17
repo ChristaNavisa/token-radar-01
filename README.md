@@ -1,4 +1,4 @@
-# Token Radar — radar-2
+# Token Radar — radar-3
 
 [![make.fun · token-radar-01](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 [![rank](https://make.fun/badge/token-radar-01/ChristaNavisa/token-radar-01/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
@@ -8,21 +8,39 @@ A token launch radar: 226 pre-token protocols from the sealed DefiLlama snapshot
 an implied value the model derives from the snapshot's own figures — no hardcoded names, no
 hand-picked list.
 
-## The model (radar-2)
+## The model (radar-3)
 
 ```
 implied = round( tvl_usd x category_multiple
-                 x (1 + clamp(change_7d, -60, 120) / 100 x 0.5)
+                 x (1 + 0.5 x sign(g) x ln(1 + |g| / 100))
                  x (0.6 + min(age_days, 1095) / 1095 x 0.4) )
+g = clamp(change_7d, -60, 120)
 ```
 
-The one change from the starter's flat 0.25x: the **category multiple** is the median
-market-cap-to-TVL ratio of the live-token protocols in the row's own category, learned from this
-snapshot at run time and clamped to 0.05–1.00 (a category with fewer than three live protocols
-takes the global median, 0.21x). On this snapshot the live medians run from 0.025x (Restaking)
+Two changes from radar-2. First, the **category multiple** is no longer a hard fallback: it is
+the category's median market-cap-to-TVL ratio, shrunk toward the global median (0.21x) with a
+pseudo-count of 3 — (n x category median + 3 x global median) / (n + 3). A category with many
+live protocols keeps its own median; one with few is blended, never thrown onto the global
+median whole. Radar-2 fell back to the global median for 97 of the 226 board rows; radar-3
+blends every category instead. On this snapshot the live medians run from 0.025x (Restaking)
 to 1.22x (Cross Chain Bridge), so one flat multiple overprices some categories and underprices
-others by an order of magnitude. Age is the time since DefiLlama first listed the protocol — the
-best record of how long it has run with no token.
+others by an order of magnitude. Second, **growth is dampened on a log scale**: a +120% week is
+worth 1.39x, not 1.60x, so one hot week cannot dominate the ranking. Age is the time since
+DefiLlama first listed the protocol — the best record of how long it has run with no token.
+
+## The model, checked
+
+The model is tested, not just asserted. A leave-one-out check scores the 128 live-token
+protocols as if each had no token — its own ratio left out of its category's multiple — and
+compares the predicted value with the market cap it actually trades at (computed at run time,
+shown in the dashboard):
+
+- **Spearman ρ = 0.38** between the model's predicted value and the actual market cap.
+- **Top decile: 5 of the 13** most valuable live protocols land in the model's top decile
+  (chance alone would put 1.3 there).
+- **Median predicted / actual = 0.96x** — the model is unbiased.
+- **Within 2x: 20%** — market caps vary widely around any category median, which is why the
+  board is a ranking, not a price list. The ranking stats above are the test that matters.
 
 The board covers all 40 watchlist protocols plus the 186 rankable pre-token protocols below
 the $50M floor, by TVL (186 is all there are: every rankable pre-token protocol below the floor
@@ -31,11 +49,13 @@ their market caps shown — they are also where the category multiples are learn
 
 ## The dashboard
 
-- A board ranked by implied value, with a category chart, search, category / chain / minimum-TVL
-  filters, a watchlist-only toggle, and sorting by implied value, TVL, growth, age or name.
+- A board ranked by implied value, with a category chart, a leave-one-out check of the model,
+  search, category / chain / minimum-TVL filters, a watchlist-only toggle, and sorting by
+  implied value, TVL, growth, age or name.
 - A detail view for every protocol: the model's inputs and arithmetic, why it ranks where it
-  does, and a seven-step farm plan with costs and times, derived from the protocol's category,
-  chains, TVL and age.
+  does (including its rank inside its own category), and an eight-step farm plan with costs and
+  times, derived from the protocol's category, chains, TVL and age — with a second-chain repeat
+  for protocols on two or more chains and a monthly launch watch.
 - A **model sandbox**: three sliders (category-multiple scale, growth weight, maturity floor)
   re-rank the whole board live in the browser from the same formula, so a reader can test what
   the ranking is sensitive to. The board.json this entry hands in never changes.

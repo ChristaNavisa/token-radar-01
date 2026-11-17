@@ -1,14 +1,16 @@
-// Token Radar's dashboard, model radar-2. It reads window.RADAR (written beside dashboard/ by
+// Token Radar's dashboard, model radar-3. It reads window.RADAR (written beside dashboard/ by
 // main.ts) and renders the ranked board, a filterable table, a per-protocol detail drawer with
-// the model's own inputs and the protocol's farm plan, a category chart, and a model sandbox
-// that re-ranks the board live in the browser. No network: every byte it shows is in data.js.
+// the model's own inputs and the protocol's farm plan, a category chart, a leave-one-out check
+// of the model on the protocols whose token already trades, and a model sandbox that re-ranks
+// the board live in the browser. No network: every byte it shows is in data.js.
 //
 // The sandbox recomputes each row from the snapshot figures with the same formula main.ts runs,
 // so the page's code and the board's data are visibly the same arithmetic:
-//   implied = round(tvl x category_multiple x (1 + clamp(change_7d,-60,120)/100 x growth_weight)
+//   implied = round(tvl x category_multiple x (1 + 0.5 x sign(g) x ln(1 + |g|/100))
 //                   x (maturity_floor + min(age_days,1095)/1095 x (1 - maturity_floor)))
-// The category multiple is the median market-cap-to-TVL ratio of the live-token protocols in
-// the row's own category, learned from this snapshot; the sandbox scales it.
+//   where g = clamp(change_7d,-60,120), and the category multiple is the category's median
+//   market-cap-to-TVL ratio shrunk toward the global median with a pseudo-count of 3:
+//   (n x category median + 3 x global median) / (n + 3).
 (function () {
   'use strict';
 
@@ -40,11 +42,12 @@
 
   // The model in one function: the page recomputes a row from the snapshot figures and checks
   // the number board.json carries, so the page's code and the board's data are visibly the same
-  // arithmetic. With the sandbox off, the stored implied value is returned untouched.
+  // arithmetic. With the sandbox off, the stored implied value is returned untouched. Growth is
+  // dampened on a log scale, as in main.ts: one hot week cannot dominate the ranking.
   function impliedOf(row, sb) {
     if (!sb || !sb.active) return row.implied_value_usd;
     var growth = Math.min(DATA.model.growth_cap, Math.max(DATA.model.growth_floor, row.change_7d === null || row.change_7d === undefined ? 0 : row.change_7d));
-    var growthMult = 1 + (growth / 100) * sb.weight;
+    var growthMult = 1 + sb.weight * Math.sign(growth) * Math.log1p(Math.abs(growth) / 100);
     var age = row.age_days === null || row.age_days === undefined ? DATA.model.unknown_age_days : row.age_days;
     var maturity = sb.floor + (Math.min(Math.max(age, 0), DATA.model.maturity_days) / DATA.model.maturity_days) * (1 - sb.floor);
     return Math.max(1, Math.round(row.tvl_usd * row.category_multiple * sb.mult * growthMult * maturity));
@@ -127,12 +130,16 @@
     var capital = capitalFor(p);
     var hold = holdDaysFor(p.age_days);
     var weekly = weeklyActionFor(p);
+    var weeklyText = (p.chains && p.chains.length >= 2)
+      ? 'Make one qualifying action each week on ' + chain + ', such as ' + weekly + ', and once a month repeat the core action on ' + p.chains[1] + ', so the wallet shows repeat activity on both chains.'
+      : 'Make one qualifying action each week, such as ' + weekly + ', so the wallet shows repeat activity.';
     return [
       { text: 'Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.', cost: 'under $3 of gas for the first transaction', time: '5 minutes' },
       { text: actionFor(p, capital, chain), cost: '$' + capital + ' of capital and about $' + (capital >= 150 ? 8 : 4) + ' of gas', time: '15 minutes to set up' },
-      { text: 'Make one qualifying action each week, such as ' + weekly + ', so the wallet shows repeat activity.', cost: 'about $2 of gas a week', time: '10 minutes a week' },
+      { text: weeklyText, cost: 'about $2 of gas a week', time: '10 minutes a week' },
       { text: 'Hold the position for at least ' + hold + ' days so the activity is counted in more than one snapshot.', cost: 'the $' + capital + ' stays in the position', time: hold + ' days' },
       { text: "Once a month, check " + p.name + "'s own points or rewards page for a snapshot date and write it in your farm log.", cost: 'no fee to check', time: '10 minutes a month' },
+      { text: 'Set a monthly reminder to check whether ' + p.name + ' has announced a token or a points program, and read the announcement on the protocol\'s own page.', cost: 'no fee to check', time: '5 minutes a month' },
       { text: "Before you withdraw, open the protocol's own points or rewards page and claim only from the link it publishes.", cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
       { text: 'Write the wallet, the dates and every transaction in a farm log so you can repeat the position or unwind it.', cost: 'nothing but the log', time: '5 minutes' }
     ].map(stepText);
@@ -234,7 +241,7 @@
     var max = top.length ? top[0].v : 1;
     return el('section', { class: 'panel' },
       el('h2', { text: 'Where the implied value sits' }),
-      el('p', { class: 'sub', text: 'Total implied value by category across the ranked board. Lending and Dexs dominate the board; the multiples behind them are learned from live tokens in the same category.' }),
+      el('p', { class: 'sub', text: 'Total implied value by category across the ranked board. ' + (top.length ? top[0].c + ' leads at ' + fmtUsd(top[0].v) + '; ' : '') + 'the multiples behind each category are learned from live tokens in the same category, blended with the global median.' }),
       el('div', { class: 'chart' }, top.map(function (t) {
         return el('div', { class: 'chart-row' },
           el('span', { text: t.c }),
@@ -242,6 +249,28 @@
           el('span', { class: 'num', text: fmtUsd(t.v) })
         );
       }))
+    );
+  }
+
+  function calibrationPanel() {
+    var c = DATA.calibration;
+    if (!c || !c.n) {
+      return el('section', { class: 'panel' },
+        el('h2', { text: 'Does the model rank value?' }),
+        el('p', { class: 'sub', text: 'No live-token protocol was available to check the model against, so no check ran.' })
+      );
+    }
+    var chance = (c.top_decile_total / 10).toFixed(1);
+    return el('section', { class: 'panel' },
+      el('h2', { text: 'Does the model rank value? A leave-one-out check' }),
+      el('p', { class: 'sub', text: 'Before ranking the pre-token board, the model is tested on the ' + c.n + ' protocols whose token already trades: each one is scored as if it had no token, with its own ratio left out of its category multiple, and the predicted value is compared with the market cap it actually trades at.' }),
+      el('div', { class: 'calib' },
+        el('div', { class: 'stat' }, el('span', { text: 'Rank agreement (Spearman ρ)' }), el('b', { text: c.spearman.toFixed(2) })),
+        el('div', { class: 'stat' }, el('span', { text: 'Top decile found' }), el('b', { text: c.top_decile_hit + ' of ' + c.top_decile_total })),
+        el('div', { class: 'stat' }, el('span', { text: 'Median predicted / actual' }), el('b', { text: c.median_ratio.toFixed(2) + 'x' })),
+        el('div', { class: 'stat' }, el('span', { text: 'Predicted within 2x of actual' }), el('b', { text: Math.round(c.within_2x * 100) + '%' }))
+      ),
+      el('p', { class: 'sub', text: 'Of the ' + c.top_decile_total + ' most valuable live protocols, ' + c.top_decile_hit + ' land in the model\'s top decile — chance alone would put ' + chance + ' there. The model ranks value; it does not price it to the dollar. A single protocol\'s market cap can sit far from its category\'s median, and that dispersion is why the board is a ranking, not a price list.' })
     );
   }
 
@@ -375,25 +404,26 @@
     var m = DATA.model;
     var multiples = Object.keys(DATA.category_multiples || {}).map(function (c) {
       var e = DATA.category_multiples[c];
-      return { c: c, multiple: e.multiple, samples: e.samples, fallback: e.fallback };
+      return { c: c, multiple: e.multiple, samples: e.samples, fallback: e.fallback, learned_share: e.learned_share || 0 };
     }).sort(function (a, b) { return b.multiple - a.multiple; });
     return el('section', { class: 'panel model' },
       el('h2', { text: 'How implied value is computed' }),
       el('p', { class: 'sub', text: 'Every row is scored by one function of the snapshot figures. No protocol name is special-cased, and no row is hand-picked.' }),
       el('div', { class: 'formula' },
-        'implied = round( tvl_usd x category_multiple x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') )'
+        'implied = round( tvl_usd x category_multiple x (1 + ' + m.growth_weight + ' x sign(g) x ln(1 + |g| / 100)) x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') ),  g = clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ')'
       ),
-      el('p', { class: 'sub', text: 'The category multiple is the median market-cap-to-TVL ratio of the live-token protocols in that category, learned from this snapshot and clamped to ' + m.multiple_floor + '–' + m.multiple_cap + '. A category with fewer than ' + m.multiple_min_samples + ' live protocols to learn from takes the global median, ' + fmtMult(DATA.global_multiple) + '. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. The early radar is every pre-token protocol below the watchlist floor, by TVL, and the live-token protocols are set aside with their market caps shown.' }),
+      el('p', { class: 'sub', text: 'The category multiple is the median market-cap-to-TVL ratio of the live-token protocols in that category, shrunk toward the global median ' + fmtMult(DATA.global_multiple) + ' with a pseudo-count of ' + m.shrink_k + ': (n x category median + ' + m.shrink_k + ' x global median) / (n + ' + m.shrink_k + '). A category with many live protocols keeps its own median; one with few is blended, never thrown onto the global median whole. Growth is dampened on a log scale, so a +120% week is worth 1.39x, not 1.60x. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. The early radar is every pre-token protocol below the watchlist floor, by TVL, and the live-token protocols are set aside with their market caps shown.' }),
       el('div', { class: 'table-wrap' },
         el('table', null,
           el('caption', { class: 'sub', text: 'Category multiples learned from the snapshot (live protocols only).' }),
           el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Category' }), el('th', { scope: 'col', text: 'Multiple' }), el('th', { scope: 'col', text: 'Live protocols' }), el('th', { scope: 'col', text: 'Note' }))),
           el('tbody', null, multiples.slice(0, 12).map(function (x) {
+            var note = x.learned_share >= 0.99 ? 'own category median' : x.learned_share <= 0.01 ? 'global median' : 'blended, ' + Math.round(x.learned_share * 100) + '% own median';
             return el('tr', null,
               el('td', { text: x.c }),
               el('td', { class: 'num', text: fmtMult(x.multiple) }),
               el('td', { class: 'num', text: String(x.samples) }),
-              el('td', { class: 'sub', text: x.fallback ? 'global median (too few live)' : 'learned from live' })
+              el('td', { class: 'sub', text: note })
             );
           }))
         )
@@ -434,11 +464,13 @@
     var steps = farmSteps(row);
     var mult = DATA.category_multiples[row.category || 'Other'];
     var multNote = mult
-      ? (mult.fallback ? 'Global median — too few live protocols in this category to learn from.' : 'Median mcap/TVL of ' + mult.samples + ' live-token protocols in this category.')
+      ? (mult.samples === 0
+        ? 'Global median — no live-token protocol in this category to learn from.'
+        : 'Median mcap/TVL of ' + mult.samples + ' live-token protocol' + (mult.samples === 1 ? '' : 's') + ' in this category, blended with the global median (' + Math.round((mult.learned_share || 0) * 100) + '% learned).')
       : 'Global median.';
     var why = 'Rank ' + row.rank + ' because ' + fmtUsd(row.tvl_usd) + ' of TVL at a ' + fmtMult(row.category_multiple) + ' category multiple, '
       + (row.change_7d === null ? 'no reported seven-day change' : 'a seven-day change of ' + fmtPct(row.change_7d)) + ', and '
-      + fmtAge(row.age_days) + ' listed with no token on record.';
+      + fmtAge(row.age_days) + ' listed with no token on record. Within ' + (row.category || 'Other') + ' it ranks #' + (row.category_rank || 1) + '.';
     dialog.appendChild(el('div', { class: 'detail-head' },
       el('div', null,
         el('span', { class: 'brand-name', text: 'Rank ' + row.rank + ' of ' + DATA.board_size + (row.watchlist ? ' · on the watchlist' : ' · early radar') }),
@@ -483,6 +515,7 @@
     shell.appendChild(header());
     shell.appendChild(lede());
     shell.appendChild(categoryChart());
+    shell.appendChild(calibrationPanel());
     shell.appendChild(controls());
     shell.appendChild(state.tab === 'pre-token' ? boardTable() : liveTable());
     if (state.tab === 'pre-token') {
