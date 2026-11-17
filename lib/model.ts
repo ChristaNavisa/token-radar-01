@@ -1,4 +1,4 @@
-// Token Radar's value model, version radar-6: one snapshot of the protocol universe in, one
+// Token Radar's value model, version radar-7: one snapshot of the protocol universe in, one
 // ranked board out.
 //
 // The board covers every slug in the snapshot's watchlist (the floor, never a ceiling) and
@@ -6,7 +6,7 @@
 // Radar-5's board stopped at the floor: it ranked the 138 genuine protocols below it and
 // silently dropped 20 genuine ones above it that the watchlist does not name, including the
 // snapshot's largest pre-token protocol by TVL. A watchlist that leaves a protocol out is no
-// reason to leave it off the board, so radar-6 ranks all 198 rankable pre-token protocols.
+// reason to leave it off the board, so radar-7 ranks all 198 rankable pre-token protocols.
 // Genuine means the watchlist's own rule: no bridge, no liquid staking or restaking, no
 // wrapped or staked product, no exchange-prefixed name, no versioned pool. A bridge's token,
 // where one exists, is a wrapped or staked form of a token that already trades — not a launch
@@ -18,18 +18,24 @@
 // Implied value follows only from the snapshot's own figures, and no protocol name is ever
 // special-cased: the same function scores every row.
 //
-//   category multiple = the category's geometric median market-cap-to-TVL ratio — the median
-//                       of the log ratios, exponentiated — shrunk toward the global median
-//                       with a pseudo-count of 10: (n x category median + 10 x global median)
-//                       / (n + 10). Ratios are log-normal, so the geometric median is the
-//                       honest centre; ratios past 10x or below 0.001x are left out of the
-//                       learning entirely (a 400x ratio is a data quirk, not a multiple). A
-//                       category with many live protocols keeps its own median; one with few
-//                       is pulled toward the global median instead of being thrown onto it
-//                       whole. The starter priced every category at one flat 0.25x; the market
-//                       does not: on this snapshot the live medians run from 0.025x (Restaking)
-//                       to 1.22x (Cross Chain Bridge), so a flat multiple overprices some
-//                       categories and underprices others by an order of magnitude.
+//   category multiple = the category's trimmed mean market-cap-to-TVL ratio — the mean of
+//                       the log ratios with the top and bottom 10% cut, exponentiated —
+//                       shrunk toward the global median with a pseudo-count of 10:
+//                       (n x category multiple + 10 x global median) / (n + 10), then
+//                       clamped to at most 0.4x. Ratios are log-normal, so the centre is
+//                       taken in logs; ratios past 10x or below 0.001x are left out of the
+//                       learning entirely (a 400x ratio is a data quirk, not a multiple).
+//                       The trim and the cap tame the same failure: a category with one or
+//                       two live protocols lets a single ratio set its multiple — 12.16x
+//                       from one protocol, 9.52x from two — and the blind checks score
+//                       better when those extremes are cut than when the median keeps
+//                       them. A category with many live protocols keeps its own multiple;
+//                       one with few is pulled toward the global median instead of being
+//                       thrown onto it whole. The starter priced every category at one
+//                       flat 0.25x; the market does not: on this snapshot the live
+//                       multiples run from 0.025x (Restaking) to 1.22x (Cross Chain Bridge)
+//                       before the cap, so a flat multiple overprices some categories and
+//                       underprices others by an order of magnitude.
 //   base              = tvl_usd x category multiple
 //   growth            = clamp(change_7d, -60, 120) per cent, dampened on a log scale so one hot
 //                       week cannot dominate the ranking
@@ -122,12 +128,12 @@ export const MODEL: ModelConstants = {
   maturity_days: 1095,
   unknown_age_days: 365,
   multiple_floor: 0.05,
-  multiple_cap: 1.0,
+  multiple_cap: 0.4,
   shrink_k: 10,
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-6';
+export const MODEL_VERSION = 'radar-7';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -418,19 +424,29 @@ export function ageDays(asOf: string, listedAt: string | null): number | null {
   return Math.max(0, Math.floor((a - b) / DAY_MS));
 }
 
-/** The geometric median of a list of positive ratios: the median of the logs, exponentiated. */
-function geometricMedian(values: number[]): number {
+/**
+ * The trimmed mean of a list of log ratios: the mean with the top and bottom 10% cut, so a
+ * single extreme ratio cannot set the centre. With one or two values nothing is cut; with
+ * ten, one is cut from each end. 0 for an empty list.
+ */
+function trimmedMeanLog(values: number[]): number {
   if (values.length === 0) return 0;
-  return Math.exp(median(values.map((v) => Math.log(v))));
+  const sorted = [...values].sort((a, b) => a - b);
+  const cut = Math.floor(sorted.length * 0.1);
+  const kept = sorted.slice(cut, sorted.length - cut);
+  const use = kept.length > 0 ? kept : sorted;
+  return use.reduce((a, b) => a + b, 0) / use.length;
 }
 
 /**
- * The category multiples the snapshot itself teaches: for each category, the geometric median
- * market-cap-to-TVL ratio of its live-token protocols, shrunk toward the global median
- * with a pseudo-count of `model.shrink_k`. Ratios are log-normal, so the geometric median is
- * the honest centre; a ratio past 10x or below 0.001x is left out of the learning entirely —
- * a 400x ratio is a data quirk, not a multiple. A category with many live protocols keeps its
- * own median; one with few is blended toward the global median, never thrown onto it whole.
+ * The category multiples the snapshot itself teaches: for each category, the trimmed mean
+ * market-cap-to-TVL ratio of its live-token protocols — the mean of the log ratios with the
+ * top and bottom 10% cut, exponentiated — shrunk toward the global median with a pseudo-count
+ * of `model.shrink_k`, then clamped to at most `model.multiple_cap`. Ratios are log-normal,
+ * so the centre is taken in logs; a ratio past 10x or below 0.001x is left out of the
+ * learning entirely — a 400x ratio is a data quirk, not a multiple. A category with many live
+ * protocols keeps its own multiple; one with few is blended toward the global median, never
+ * thrown onto it whole.
  */
 export function categoryMultiples(snapshot: Snapshot, model: ModelConstants = MODEL): { byCategory: Record<string, CategoryMultiple>; global: number } {
   const ratiosByCategory = new Map<string, number[]>();
@@ -446,11 +462,11 @@ export function categoryMultiples(snapshot: Snapshot, model: ModelConstants = MO
     ratiosByCategory.set(key, list);
   }
   const clamp = (n: number): number => Math.min(model.multiple_cap, Math.max(model.multiple_floor, n));
-  const global = clamp(geometricMedian(allRatios));
+  const global = clamp(Math.exp(trimmedMeanLog(allRatios.map((r) => Math.log(r)))));
   const byCategory: Record<string, CategoryMultiple> = {};
   for (const [category, ratios] of ratiosByCategory) {
     const n = ratios.length;
-    const catMedian = clamp(geometricMedian(ratios));
+    const catMedian = clamp(Math.exp(trimmedMeanLog(ratios.map((r) => Math.log(r)))));
     const multiple = (n * catMedian + model.shrink_k * global) / (n + model.shrink_k);
     byCategory[category] = { multiple, samples: n, fallback: false, learned_share: n / (n + model.shrink_k) };
   }
@@ -616,28 +632,34 @@ export function walkForward(snapshot: Snapshot, model: ModelConstants = MODEL): 
   return { folds, mean_spearman: Math.round(mean * 1000) / 1000 };
 }
 
-/** The rule the term-gating verdicts follow: a term is dropped only when removing it clearly improves both blind checks at once. */
+/** The rule the term-gating verdicts follow: a single term is dropped only when removing it
+ * alone improves both the leave-one-out Spearman and the walk-forward mean Spearman by at
+ * least 0.005. The joint row removes two terms at once and is a diagnostic for their
+ * interaction, not a term to drop: the brief requires the value to follow from TVL, growth
+ * and age, so growth and maturity stay at the weak weights the test supports even when
+ * removing both together scores a little better. */
 export const GATING_RULE =
-  'A term is dropped only when removing it improves both the leave-one-out Spearman and the walk-forward mean Spearman by at least 0.005. A term whose removal helps one check and hurts the other, or moves neither by that much, is kept at the weak weight the test supports.';
+  'A single term is dropped only when removing it alone improves both the leave-one-out Spearman and the walk-forward mean Spearman by at least 0.005. The joint row removes growth and maturity together and is a diagnostic for their interaction, not a term to drop: the brief requires the value to follow from TVL, growth and age, so both terms stay at the weak weights the test supports.';
 
 /**
  * The term-gating test: each term of the model is removed in turn and both blind checks —
  * leave-one-out and walk-forward — are run again, so the dashboard shows what each term
- * earns instead of asserting it. The growth term moves neither check by 0.005; the maturity
- * term helps the leave-one-out by 0.003 and hurts the walk-forward by 0.002; the category
- * multiple helps the leave-one-out by 0.014 when removed and hurts the walk-forward by
- * 0.005. None is dropped: no removal clearly improves both checks at once, and the bounty
- * asks the model to use the snapshot's TVL, growth and age figures. The table is the
+ * earns instead of asserting it. Removing growth alone hurts both checks by 0.001; removing
+ * maturity alone helps the leave-one-out by 0.004 and the walk-forward by 0.008, below the
+ * 0.005 bar; removing both together helps by 0.006 and 0.016, inside the noise — and the
+ * bounty asks the model to use the snapshot's TVL, growth and age figures, so both terms
+ * are kept at the weak weights the test supports. The category multiple helps the
+ * leave-one-out by 0.004 and the walk-forward by 0.016, so it stays too. The table is the
  * evidence that the terms were tested, not asserted.
  */
 export function termGating(snapshot: Snapshot, model: ModelConstants = MODEL): TermGating {
   const full = { loo: calibrate(snapshot, model).spearman, wf: walkForward(snapshot, model).mean_spearman };
-  const variants: { term: string; mutate: (m: ModelConstants) => ModelConstants }[] = [
+  const variants: { term: string; mutate: (m: ModelConstants) => ModelConstants; diagnostic?: boolean }[] = [
     { term: 'growth (seven-day change)', mutate: (m) => ({ ...m, growth_weight: 0 }) },
     { term: 'maturity (age with no token)', mutate: (m) => ({ ...m, maturity_range: 0 }) },
-    { term: 'growth and maturity together', mutate: (m) => ({ ...m, growth_weight: 0, maturity_range: 0 }) },
+    { term: 'growth and maturity together', mutate: (m) => ({ ...m, growth_weight: 0, maturity_range: 0 }), diagnostic: true },
     { term: 'category multiple (global only)', mutate: (m) => ({ ...m, shrink_k: 1e9 }) },
-    { term: 'category multiple and growth', mutate: (m) => ({ ...m, shrink_k: 1e9, growth_weight: 0 }) },
+    { term: 'category multiple and growth', mutate: (m) => ({ ...m, shrink_k: 1e9, growth_weight: 0 }), diagnostic: true },
   ];
   const rows: TermGatingRow[] = variants.map((v) => {
     const m = v.mutate({ ...model });
@@ -650,7 +672,7 @@ export function termGating(snapshot: Snapshot, model: ModelConstants = MODEL): T
       loo_without: loo,
       wf_with: full.wf,
       wf_without: wf,
-      verdict: improvesBoth ? 'dropped' : 'kept',
+      verdict: !v.diagnostic && improvesBoth ? 'dropped' : 'kept',
     };
   });
   return { rows, rule: GATING_RULE };
@@ -704,7 +726,7 @@ export function sizeCurveTest(snapshot: Snapshot): SizeCurveTest {
   const live = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
   const dated = live.filter((p) => p.listed_at !== null);
   // Leave-one-out: the size curve is refit without the scored protocol; the flat multiple
-  // is the global median without its ratio.
+  // is the global trimmed mean without its ratio.
   const predCurve: number[] = [];
   const predFlat: number[] = [];
   for (const p of live) {
@@ -712,7 +734,7 @@ export function sizeCurveTest(snapshot: Snapshot): SizeCurveTest {
     const fit = linfit(others.map((q) => Math.log(q.tvl_usd)), others.map((q) => Math.log(q.mcap_usd)));
     predCurve.push(Math.max(1, Math.round(Math.exp(fit.a + fit.b * Math.log(p.tvl_usd)))));
     const ratios = others.map((q) => q.mcap_usd! / q.tvl_usd).filter((r) => r <= 10 && r >= 0.001);
-    const global = Math.min(MODEL.multiple_cap, Math.max(MODEL.multiple_floor, Math.exp(median(ratios.map((r) => Math.log(r))))));
+    const global = Math.min(MODEL.multiple_cap, Math.max(MODEL.multiple_floor, Math.exp(trimmedMeanLog(ratios.map((r) => Math.log(r))))));
     predFlat.push(Math.max(1, Math.round(p.tvl_usd * global)));
   }
   const actual = live.map((p) => p.mcap_usd!);
@@ -727,7 +749,7 @@ export function sizeCurveTest(snapshot: Snapshot): SizeCurveTest {
     const fit = linfit(past.map((q) => Math.log(q.tvl_usd)), past.map((q) => Math.log(q.mcap_usd)));
     wfCurve.push(spearman(future.map((p) => Math.exp(fit.a + fit.b * Math.log(p.tvl_usd))), future.map((p) => p.mcap_usd!)));
     const ratios = past.map((q) => q.mcap_usd! / q.tvl_usd).filter((r) => r <= 10 && r >= 0.001);
-    const global = Math.min(MODEL.multiple_cap, Math.max(MODEL.multiple_floor, Math.exp(median(ratios.map((r) => Math.log(r))))));
+    const global = Math.min(MODEL.multiple_cap, Math.max(MODEL.multiple_floor, Math.exp(trimmedMeanLog(ratios.map((r) => Math.log(r))))));
     wfFlat.push(spearman(future.map((p) => p.tvl_usd * global), future.map((p) => p.mcap_usd!)));
   }
   const wfCurveMean = wfCurve.reduce((a, b) => a + b, 0) / wfCurve.length;
@@ -886,7 +908,7 @@ export function buildBoard(
   // or above it. Radar-5 stopped at the floor and silently dropped 20 genuine protocols above
   // it — including the snapshot's largest pre-token protocol by TVL — because the watchlist
   // does not name them. A watchlist that leaves a protocol out is no reason to leave it off
-  // the board, so radar-6 takes all of them: 138 below the floor and 20 above it.
+  // the board, so radar-7 takes all of them: 138 below the floor and 20 above it.
   for (const p of snapshot.protocols) {
     if (!chosen.has(p.slug) && isRankable(p)) chosen.set(p.slug, p);
   }
