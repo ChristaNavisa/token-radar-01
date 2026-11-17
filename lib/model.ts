@@ -1,29 +1,42 @@
-// Token Radar's value model, version radar-2: one snapshot of the protocol universe in, one
+// Token Radar's value model, version radar-4: one snapshot of the protocol universe in, one
 // ranked board out.
 //
 // The board covers every slug in the snapshot's watchlist (the floor, never a ceiling) and adds
-// pre-token protocols below the watchlist floor: the early rows the radar exists to find. A protocol
-// is pre-token when its index entry records no token (no market cap, no CoinGecko id, no symbol);
-// the snapshot's live-token protocols are kept apart and shown as the market's own values, never
-// mixed into the ranked board.
+// genuine pre-token protocols below the watchlist floor: the early rows the radar exists to find.
+// Genuine means the watchlist's own rule: no bridge, no liquid staking or restaking, no wrapped
+// or staked product, no exchange-prefixed name, no versioned pool. A bridge's token, where one
+// exists, is a wrapped or staked form of a token that already trades — not a launch waiting to
+// happen — so the early radar leaves those 48 rows out and takes the genuine protocols instead.
+// A protocol is pre-token when its index entry records no token (no market cap, no CoinGecko id,
+// no symbol); the snapshot's live-token protocols are kept apart and shown as the market's own
+// values, never mixed into the ranked board.
 //
 // Implied value follows only from the snapshot's own figures, and no protocol name is ever
 // special-cased: the same function scores every row.
 //
-//   category multiple = the category's median market-cap-to-TVL ratio, shrunk toward the
-//                       global median with a pseudo-count of 3: (n x category median + 3 x
-//                       global median) / (n + 3). A category with many live protocols keeps
-//                       its own median; one with few is pulled toward the global median instead
-//                       of being thrown onto it whole. The starter priced every category at one
-//                       flat 0.25x; the market does not: on this snapshot the live medians run
-//                       from 0.025x (Restaking) to 1.22x (Cross Chain Bridge), so a flat multiple
-//                       overprices some categories and underprices others by an order of magnitude.
+//   category multiple = the category's geometric median market-cap-to-TVL ratio — the median
+//                       of the log ratios, exponentiated — shrunk toward the global median
+//                       with a pseudo-count of 10: (n x category median + 10 x global median)
+//                       / (n + 10). Ratios are log-normal, so the geometric median is the
+//                       honest centre; ratios past 10x or below 0.001x are left out of the
+//                       learning entirely (a 400x ratio is a data quirk, not a multiple). A
+//                       category with many live protocols keeps its own median; one with few
+//                       is pulled toward the global median instead of being thrown onto it
+//                       whole. The starter priced every category at one flat 0.25x; the market
+//                       does not: on this snapshot the live medians run from 0.025x (Restaking)
+//                       to 1.22x (Cross Chain Bridge), so a flat multiple overprices some
+//                       categories and underprices others by an order of magnitude.
 //   base              = tvl_usd x category multiple
 //   growth            = clamp(change_7d, -60, 120) per cent, dampened on a log scale so one hot
 //                       week cannot dominate the ranking
-//   growthMult        = 1 + 0.5 x sign(growth) x ln(1 + |growth| / 100)
-//   maturity          = 0.6 + min(age_days, 1095) / 1095 x 0.4   (age_days unknown: 365)
+//   growthMult        = 1 + 0.25 x sign(growth) x ln(1 + |growth| / 100)
+//   maturity          = 0.6 + min(age_days, 1095) / 1095 x 0.2   (age_days unknown: 365)
 //   implied           = max(1, round(base x growthMult x maturity))
+//
+// Growth and age are weak signals in the leave-one-out check — a protocol's seven-day change
+// and its age alone barely rank its market cap — so they move the value a little, not a lot:
+// a +120% week is worth 1.20x here, and age is worth 0.6x to 0.8x. TVL and the category
+// multiple do the ranking; growth and age tilt it, as the check supports.
 //
 //   The model is checked, not just asserted: a leave-one-out test scores the 128 live-token
 //   protocols as if each had no token (its own ratio left out of its category's multiple) and
@@ -74,22 +87,22 @@ export interface ModelConstants {
 }
 
 export const MODEL: ModelConstants = {
-  growth_weight: 0.5,
+  growth_weight: 0.25,
   growth_floor: -60,
   growth_cap: 120,
   maturity_floor: 0.6,
-  maturity_range: 0.4,
+  maturity_range: 0.2,
   maturity_days: 1095,
   unknown_age_days: 365,
   multiple_floor: 0.05,
   multiple_cap: 1.0,
-  shrink_k: 3,
+  shrink_k: 10,
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-3';
+export const MODEL_VERSION = 'radar-4';
 
-/** How many pre-token protocols below the watchlist floor the early radar carries, by TVL. */
+/** How many genuine pre-token protocols below the watchlist floor the early radar carries, by TVL. */
 export const EARLY_ROWS = 260;
 
 /** How many live-token protocols the Live token view carries, by market cap. */
@@ -237,10 +250,18 @@ export function ageDays(asOf: string, listedAt: string | null): number | null {
   return Math.max(0, Math.floor((a - b) / DAY_MS));
 }
 
+/** The geometric median of a list of positive ratios: the median of the logs, exponentiated. */
+function geometricMedian(values: number[]): number {
+  if (values.length === 0) return 0;
+  return Math.exp(median(values.map((v) => Math.log(v))));
+}
+
 /**
- * The category multiples the snapshot itself teaches: for each category, the median
+ * The category multiples the snapshot itself teaches: for each category, the geometric median
  * market-cap-to-TVL ratio of its live-token protocols, shrunk toward the global median
- * with a pseudo-count of `model.shrink_k`. A category with many live protocols keeps its
+ * with a pseudo-count of `model.shrink_k`. Ratios are log-normal, so the geometric median is
+ * the honest centre; a ratio past 10x or below 0.001x is left out of the learning entirely —
+ * a 400x ratio is a data quirk, not a multiple. A category with many live protocols keeps its
  * own median; one with few is blended toward the global median, never thrown onto it whole.
  */
 export function categoryMultiples(snapshot: Snapshot, model: ModelConstants = MODEL): { byCategory: Record<string, CategoryMultiple>; global: number } {
@@ -249,6 +270,7 @@ export function categoryMultiples(snapshot: Snapshot, model: ModelConstants = MO
   for (const p of snapshot.protocols) {
     if (p.mcap_usd === null || p.mcap_usd <= 0 || p.tvl_usd <= 0) continue;
     const ratio = p.mcap_usd / p.tvl_usd;
+    if (ratio > 10 || ratio < 0.001) continue;
     allRatios.push(ratio);
     const key = p.category ?? 'Other';
     const list = ratiosByCategory.get(key) ?? [];
@@ -256,11 +278,11 @@ export function categoryMultiples(snapshot: Snapshot, model: ModelConstants = MO
     ratiosByCategory.set(key, list);
   }
   const clamp = (n: number): number => Math.min(model.multiple_cap, Math.max(model.multiple_floor, n));
-  const global = clamp(median(allRatios));
+  const global = clamp(geometricMedian(allRatios));
   const byCategory: Record<string, CategoryMultiple> = {};
   for (const [category, ratios] of ratiosByCategory) {
     const n = ratios.length;
-    const catMedian = clamp(median(ratios));
+    const catMedian = clamp(geometricMedian(ratios));
     const multiple = (n * catMedian + model.shrink_k * global) / (n + model.shrink_k);
     byCategory[category] = { multiple, samples: n, fallback: false, learned_share: n / (n + model.shrink_k) };
   }
@@ -377,14 +399,31 @@ export function calibrate(snapshot: Snapshot, model: ModelConstants = MODEL): Ca
 /** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
 const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
 
+/** The categories the watchlist rule keeps out: a bridge, a staking wrapper, or an exchange is not a launch waiting to happen. */
+const EXCLUDED_CATEGORIES = new Set(['Bridge', 'Canonical Bridge', 'Liquid Staking', 'Liquid Restaking', 'Restaked BTC', 'CEX']);
+
+/** A name that begins with an exchange's name is that exchange's product, not its own protocol. */
+const EXCHANGE_PREFIXES = ['Binance', 'Coinbase', 'Bybit', 'Kraken', 'Bitget', 'OKX', 'Bitfinex', 'Gemini'];
+
 /** Whether a protocol records no token at all. */
 export function isPreToken(p: SnapshotProtocol): boolean {
   return p.mcap_usd === null && p.gecko_id === null && p.symbol === null;
 }
 
-/** Whether a protocol is one the board may rank: pre-token, not an exchange, not a versioned pool. */
+/**
+ * Whether a protocol is one the board may rank: a genuine pre-token protocol under the
+ * watchlist's own rule — pre-token, not a bridge, not liquid staking or restaking, no wrapped
+ * or staked word in its name, not an exchange's product, not a versioned pool. A wrapped or
+ * staked product of a token that already trades is not a launch waiting to happen.
+ */
 export function isRankable(p: SnapshotProtocol): boolean {
-  return isPreToken(p) && p.category !== 'CEX' && !VERSIONED.test(p.name);
+  return (
+    isPreToken(p) &&
+    !EXCLUDED_CATEGORIES.has(p.category ?? '') &&
+    !VERSIONED.test(p.name) &&
+    !/\bwrapped\b|\bstaked\b|\bstaking\b/i.test(p.name) &&
+    !EXCHANGE_PREFIXES.some((e) => p.name.startsWith(e))
+  );
 }
 
 /** The snapshot's protocol by slug. */
@@ -406,8 +445,8 @@ export function buildBoard(
     const p = index.get(slug);
     if (p !== undefined) chosen.set(slug, p);
   }
-  // The early radar: pre-token protocols below the watchlist floor, by TVL, capped. Never a
-  // replacement for a watchlist row: a chosen protocol stays chosen.
+  // The early radar: genuine pre-token protocols below the watchlist floor, by TVL, capped.
+  // Never a replacement for a watchlist row: a chosen protocol stays chosen.
   const early = snapshot.protocols
     .filter((p) => !chosen.has(p.slug) && isRankable(p) && p.tvl_usd < snapshot.floor_usd)
     .sort((a, b) => b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))

@@ -1,4 +1,4 @@
-// Token Radar's dashboard, model radar-3. It reads window.RADAR (written beside dashboard/ by
+// Token Radar's dashboard, model radar-4. It reads window.RADAR (written beside dashboard/ by
 // main.ts) and renders the ranked board, a filterable table, a per-protocol detail drawer with
 // the model's own inputs and the protocol's farm plan, a category chart, a leave-one-out check
 // of the model on the protocols whose token already trades, and a model sandbox that re-ranks
@@ -6,11 +6,12 @@
 //
 // The sandbox recomputes each row from the snapshot figures with the same formula main.ts runs,
 // so the page's code and the board's data are visibly the same arithmetic:
-//   implied = round(tvl x category_multiple x (1 + 0.5 x sign(g) x ln(1 + |g|/100))
-//                   x (maturity_floor + min(age_days,1095)/1095 x (1 - maturity_floor)))
-//   where g = clamp(change_7d,-60,120), and the category multiple is the category's median
-//   market-cap-to-TVL ratio shrunk toward the global median with a pseudo-count of 3:
-//   (n x category median + 3 x global median) / (n + 3).
+//   implied = round(tvl x category_multiple x (1 + 0.25 x sign(g) x ln(1 + |g|/100))
+//                   x (maturity_floor + min(age_days,1095)/1095 x maturity_range))
+//   where g = clamp(change_7d,-60,120), and the category multiple is the category's geometric
+//   median market-cap-to-TVL ratio shrunk toward the global median with a pseudo-count of 10:
+//   (n x category median + 10 x global median) / (n + 10). Ratios past 10x or below 0.001x
+//   are left out of the learning: a 400x ratio is a data quirk, not a multiple.
 (function () {
   'use strict';
 
@@ -49,7 +50,7 @@
     var growth = Math.min(DATA.model.growth_cap, Math.max(DATA.model.growth_floor, row.change_7d === null || row.change_7d === undefined ? 0 : row.change_7d));
     var growthMult = 1 + sb.weight * Math.sign(growth) * Math.log1p(Math.abs(growth) / 100);
     var age = row.age_days === null || row.age_days === undefined ? DATA.model.unknown_age_days : row.age_days;
-    var maturity = sb.floor + (Math.min(Math.max(age, 0), DATA.model.maturity_days) / DATA.model.maturity_days) * (1 - sb.floor);
+    var maturity = sb.floor + (Math.min(Math.max(age, 0), DATA.model.maturity_days) / DATA.model.maturity_days) * DATA.model.maturity_range;
     return Math.max(1, Math.round(row.tvl_usd * row.category_multiple * sb.mult * growthMult * maturity));
   }
 
@@ -218,7 +219,7 @@
     return el('section', { class: 'lede' },
       el('div', null,
         el('h1', { text: DATA.watchlist_size + ' watchlist protocols, ranked by implied value' }),
-        el('p', { text: 'The watchlist is the floor: every protocol with at least $' + Math.round(DATA.floor_usd / 1e6) + 'M of TVL and no token on record. The early radar adds ' + DATA.early_size + ' pre-token protocols below that floor. Implied value is a model, not a promise — and it is priced per category, not at one flat multiple.' }),
+        el('p', { text: 'The watchlist is the floor: every protocol with at least $' + Math.round(DATA.floor_usd / 1e6) + 'M of TVL and no token on record. The early radar adds ' + DATA.early_size + ' genuine pre-token protocols below that floor — no bridges, no liquid staking, no wrapped or staked products, the same rule the watchlist uses. Implied value is a model, not a promise — and it is priced per category, not at one flat multiple.' }),
         el('p', { class: 'sub', text: 'Top of the board: ' + (top ? top.name + ' at ' + fmtUsd(top.implied_value_usd) + ' implied value.' : '—') })
       ),
       el('div', { class: 'facts' },
@@ -412,7 +413,7 @@
       el('div', { class: 'formula' },
         'implied = round( tvl_usd x category_multiple x (1 + ' + m.growth_weight + ' x sign(g) x ln(1 + |g| / 100)) x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') ),  g = clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ')'
       ),
-      el('p', { class: 'sub', text: 'The category multiple is the median market-cap-to-TVL ratio of the live-token protocols in that category, shrunk toward the global median ' + fmtMult(DATA.global_multiple) + ' with a pseudo-count of ' + m.shrink_k + ': (n x category median + ' + m.shrink_k + ' x global median) / (n + ' + m.shrink_k + '). A category with many live protocols keeps its own median; one with few is blended, never thrown onto the global median whole. Growth is dampened on a log scale, so a +120% week is worth 1.39x, not 1.60x. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. The early radar is every pre-token protocol below the watchlist floor, by TVL, and the live-token protocols are set aside with their market caps shown.' }),
+      el('p', { class: 'sub', text: 'The category multiple is the geometric median market-cap-to-TVL ratio of the live-token protocols in that category, shrunk toward the global median ' + fmtMult(DATA.global_multiple) + ' with a pseudo-count of ' + m.shrink_k + ': (n x category median + ' + m.shrink_k + ' x global median) / (n + ' + m.shrink_k + '). Ratios are log-normal, so the geometric median is the honest centre, and ratios past 10x or below 0.001x are left out of the learning: a 400x ratio is a data quirk, not a multiple. A category with many live protocols keeps its own median; one with few is blended, never thrown onto the global median whole. Growth is dampened on a log scale, so a +120% week is worth 1.20x, not 1.60x. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. The early radar is every genuine pre-token protocol below the watchlist floor, by TVL, and the live-token protocols are set aside with their market caps shown.' }),
       el('div', { class: 'table-wrap' },
         el('table', null,
           el('caption', { class: 'sub', text: 'Category multiples learned from the snapshot (live protocols only).' }),
