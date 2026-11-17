@@ -1,4 +1,4 @@
-// Token Radar's value model, version radar-4: one snapshot of the protocol universe in, one
+// Token Radar's value model, version radar-5: one snapshot of the protocol universe in, one
 // ranked board out.
 //
 // The board covers every slug in the snapshot's watchlist (the floor, never a ceiling) and adds
@@ -43,6 +43,17 @@
 //   compares the predicted value with the market cap it actually trades at. The board is a
 //   ranking, so the test is a ranking test: Spearman rho between predicted and actual value,
 //   and how many of the actually most valuable protocols land in the model's top decile.
+//
+//   Two more checks hold the model to the same standard. A walk-forward test learns the
+//   multiples only from the live protocols listed before a cut date and scores the ones listed
+//   after it — the model as it would have stood then, tested on what came next. And a
+//   bootstrap refits the multiples 200 times on resampled live sets and re-ranks the board
+//   each time, so every row carries the rank range 80% of the refits give it: the top of the
+//   board is tight, the tail is not, and the dashboard says so on every row. The farm plan is
+//   costed the same way: gas, the capital locked, the yield it forgoes and the time it takes,
+//   totalled in dollars, and netted to the airdrop that breaks even — the verdict (Farm, Thin
+//   or Skip) is that break-even as a share of the row's implied value, ranked against the
+//   board in thirds, so the reader sees which rows are cheap for what they may be worth.
 //
 // Age is the time since DefiLlama first listed the protocol: the best record of how long it has
 // run with no token. A protocol that has run for years at scale with no token, and is still
@@ -100,7 +111,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-4';
+export const MODEL_VERSION = 'radar-5';
 
 /** How many genuine pre-token protocols below the watchlist floor the early radar carries, by TVL. */
 export const EARLY_ROWS = 260;
@@ -140,6 +151,8 @@ export interface BoardRow {
     age_days: number | null;
   };
   farm_steps: string[];
+  /** The farm plan's cost, totalled in dollars, and what breaks even on it. */
+  farm: FarmCost;
 }
 
 /** The dashboard's compact view of one row, with farm plans generated in the page. */
@@ -162,6 +175,14 @@ export interface RadarRow {
   watchlist: boolean;
   /** The row's rank among the board's rows in its own category (1 is the category's best). */
   category_rank: number;
+  /** The row's rank range from the bootstrap: the central 80% of 200 refits. */
+  rank_low: number;
+  /** The 90th percentile of the row's rank across the 200 bootstrap refits. */
+  rank_high: number;
+  /** The median of the row's rank across the 200 bootstrap refits. */
+  rank_median: number;
+  /** The farm plan's cost, totalled in dollars, and what breaks even on it. */
+  farm: FarmCost;
 }
 
 /** A live-token protocol: it already trades, so the board shows the market's own value, not a model's. */
@@ -200,6 +221,81 @@ export interface Calibration {
   within_2x: number;
 }
 
+/** One fold of the walk-forward test: multiples learned before the cut, scored after it. */
+export interface WalkForwardFold {
+  /** The cut date: live protocols listed before it teach the multiples, after it are scored. */
+  cutoff: string;
+  /** Live protocols with a listing date before the cut, the learning set. */
+  past_n: number;
+  /** Live protocols with a listing date on or after the cut, the scored set. */
+  future_n: number;
+  /** Spearman rho between the predicted value and the actual market cap on the future set. */
+  spearman: number;
+  /** How many of the future set's most valuable protocols land in the model's top decile. */
+  top_decile_hit: number;
+  /** How many protocols the future set's top decile holds. */
+  top_decile_total: number;
+  /** The median of predicted value over actual market cap on the future set. */
+  median_ratio: number;
+  /** The share of the future set whose predicted value lands within twice the actual one. */
+  within_2x: number;
+}
+
+/** The walk-forward test: three folds, and the mean rank agreement across them. */
+export interface WalkForward {
+  folds: WalkForwardFold[];
+  /** The mean Spearman rho across the folds. */
+  mean_spearman: number;
+}
+
+/** One row's rank range from the bootstrap: the central 80% of 200 refits, and its median rank. */
+export interface RankRange {
+  /** The 10th percentile of the row's rank across the refits (1 is the board's best). */
+  low: number;
+  /** The 90th percentile of the row's rank across the refits. */
+  high: number;
+  /** The median of the row's rank across the refits. */
+  median: number;
+}
+
+/** The bootstrap's summary: how wide the rank ranges run across the board. */
+export interface BootstrapSummary {
+  /** How many refits re-ranked the board. */
+  refits: number;
+  /** The median width of the central 80% rank range across the board's rows. */
+  median_width: number;
+  /** How many rows have a central 80% range no wider than 10 ranks. */
+  within_10: number;
+  /** How many rows have a central 80% range no wider than 25 ranks. */
+  within_25: number;
+}
+
+/** A farm plan's cost, totalled in dollars, and what breaks even on it. */
+export interface FarmCost {
+  /** The gas the plan's transactions cost, in dollars. */
+  gas_usd: number;
+  /** The capital the plan locks in the position, in dollars. */
+  capital_usd: number;
+  /** How many days the position is held. */
+  hold_days: number;
+  /** The minutes the plan takes over the hold, setup and weekly actions included. */
+  time_minutes: number;
+  /** The time valued at $10 an hour, in dollars. */
+  time_value_usd: number;
+  /** The yield the locked capital forgoes at 5% a year over the hold, in dollars. */
+  forgone_yield_usd: number;
+  /** Gas plus forgone yield plus time value: what the plan costs all in, in dollars. */
+  total_usd: number;
+  /** The airdrop that breaks even on the plan, in dollars — the total cost itself. */
+  break_even_usd: number;
+  /** The break-even airdrop as a share of the row's implied value. */
+  break_even_share: number;
+  /** How many times the row's implied value covers the plan's total cost. */
+  cover_multiple: number;
+  /** Farm, Thin or Skip: the break-even share ranked against the board in thirds. */
+  verdict: 'Farm' | 'Thin' | 'Skip';
+}
+
 /** Everything the dashboard needs: the board, the live set, and the model it runs. */
 export interface RadarData {
   as_of: string;
@@ -214,6 +310,10 @@ export interface RadarData {
   category_multiples: Record<string, CategoryMultiple>;
   global_multiple: number;
   calibration: Calibration;
+  /** The walk-forward test: multiples learned before each cut, scored after it. */
+  walk_forward: WalkForward;
+  /** The bootstrap's summary: how wide the rank ranges run across the board. */
+  bootstrap: BootstrapSummary;
   rows: RadarRow[];
   live: LiveRow[];
 }
@@ -396,6 +496,150 @@ export function calibrate(snapshot: Snapshot, model: ModelConstants = MODEL): Ca
   };
 }
 
+/** The cut dates the walk-forward test uses: each splits the dated live protocols into a past learning set and a future scored set. */
+const WALK_FORWARD_CUTS = ['2023-07-01', '2024-01-01', '2024-07-01'];
+
+/**
+ * The walk-forward test: for each cut, the multiples are learned only from the live
+ * protocols listed before the cut, and scored on the ones listed after it — the model as it
+ * would have stood then, tested on what came next. Protocols with no listing date are left
+ * out of both sides, since no cut can place them. The ranking holds up when the multiples
+ * are learned from the past alone; the top-decile hit is thin on these small future sets,
+ * and the dashboard says so rather than hiding it behind the Spearman.
+ */
+export function walkForward(snapshot: Snapshot, model: ModelConstants = MODEL): WalkForward {
+  const live = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0 && p.listed_at !== null);
+  const folds: WalkForwardFold[] = [];
+  for (const cutoff of WALK_FORWARD_CUTS) {
+    const past = live.filter((p) => p.listed_at! < cutoff);
+    const future = live.filter((p) => p.listed_at! >= cutoff);
+    const multiples = categoryMultiples({ ...snapshot, protocols: past }, model);
+    const predicted = future.map((p) => impliedValue(p, snapshot.as_of, multiples, model).implied);
+    const actual = future.map((p) => p.mcap_usd!);
+    const n = future.length;
+    if (n === 0) {
+      folds.push({ cutoff, past_n: past.length, future_n: 0, spearman: 0, top_decile_hit: 0, top_decile_total: 0, median_ratio: 0, within_2x: 0 });
+      continue;
+    }
+    const rho = spearman(predicted, actual);
+    const decile = Math.max(1, Math.round(n / 10));
+    const topActual = new Set(
+      actual.map((v, i) => ({ v, i })).sort((a, b) => b.v - a.v).slice(0, decile).map((x) => x.i),
+    );
+    const topPredicted = new Set(
+      predicted.map((v, i) => ({ v, i })).sort((a, b) => b.v - a.v).slice(0, decile).map((x) => x.i),
+    );
+    let hit = 0;
+    for (const i of topActual) if (topPredicted.has(i)) hit++;
+    const ratios = predicted.map((p, i) => p / actual[i]!);
+    const within2x = ratios.filter((r) => r >= 0.5 && r <= 2).length / n;
+    folds.push({
+      cutoff,
+      past_n: past.length,
+      future_n: n,
+      spearman: Math.round(rho * 1000) / 1000,
+      top_decile_hit: hit,
+      top_decile_total: decile,
+      median_ratio: Math.round(median(ratios) * 100) / 100,
+      within_2x: Math.round(within2x * 1000) / 1000,
+    });
+  }
+  const mean = folds.length > 0 ? folds.reduce((a, f) => a + f.spearman, 0) / folds.length : 0;
+  return { folds, mean_spearman: Math.round(mean * 1000) / 1000 };
+}
+
+/** A seeded pseudo-random generator (mulberry32), so the bootstrap refits are byte-identical on every run. */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return function (): number {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** The element at the q-th quantile of a sorted list, by index. */
+function quantile(sorted: number[], q: number): number {
+  if (sorted.length === 0) return 0;
+  return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]!;
+}
+
+/**
+ * The bootstrap rank ranges: the multiples are refit 200 times on resampled live sets and
+ * the board is re-ranked each time, so every row carries the rank range the central 80% of
+ * the refits give it. The resampling is seeded, so the ranges are the same on every run.
+ * The top of the board is tight — the best rows barely move — and the tail is wide, and the
+ * dashboard shows the range on every row instead of pretending the rank is exact.
+ */
+export function bootstrapRankRanges(
+  snapshot: Snapshot,
+  board: BoardRow[],
+  model: ModelConstants = MODEL,
+  refits = 200,
+): { ranges: Map<string, RankRange>; summary: BootstrapSummary } {
+  const live = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
+  const bySlug = new Map(snapshot.protocols.map((p) => [p.slug, p]));
+  const rng = mulberry32(20261114);
+  const rankLists = new Map<string, number[]>(board.map((r) => [r.slug, []]));
+  for (let b = 0; b < refits; b++) {
+    const resampled: SnapshotProtocol[] = [];
+    for (let i = 0; i < live.length; i++) resampled.push(live[Math.floor(rng() * live.length)]!);
+    const multiples = categoryMultiples({ ...snapshot, protocols: resampled }, model);
+    const scored = board.map((r) => ({ slug: r.slug, v: impliedValue(bySlug.get(r.slug)!, snapshot.as_of, multiples, model).implied }));
+    scored.sort((a, b) => b.v - a.v || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+    scored.forEach((s, i) => rankLists.get(s.slug)!.push(i + 1));
+  }
+  const ranges = new Map<string, RankRange>();
+  const widths: number[] = [];
+  for (const r of board) {
+    const sorted = [...rankLists.get(r.slug)!].sort((a, b) => a - b);
+    const range: RankRange = { low: quantile(sorted, 0.1), high: quantile(sorted, 0.9), median: Math.round(median(sorted)) };
+    ranges.set(r.slug, range);
+    widths.push(range.high - range.low);
+  }
+  const summary: BootstrapSummary = {
+    refits,
+    median_width: median(widths),
+    within_10: widths.filter((w) => w <= 10).length,
+    within_25: widths.filter((w) => w <= 25).length,
+  };
+  return { ranges, summary };
+}
+
+/**
+ * A farm plan's cost, totalled in dollars: the gas its transactions cost, the yield the
+ * locked capital forgoes at 5% a year over the hold, and the time it takes valued at $10 an
+ * hour. The gas and the time follow the plan's own steps: $3 for the first transaction, $4
+ * or $8 to set the position up, $2 of gas a week, 15 minutes to set up, 10 minutes a week
+ * and 10 minutes a month to check. The break-even airdrop is the total itself: the airdrop
+ * that covers what the plan costs, and the cover multiple is how many times the row's
+ * implied value covers it.
+ */
+export function farmCost(protocol: SnapshotProtocol, age: number | null, implied: number): Omit<FarmCost, 'verdict'> {
+  const capital = capitalFor(protocol);
+  const hold = holdDaysFor(age);
+  const weeks = Math.ceil(hold / 7);
+  const gas = 3 + (capital >= 150 ? 8 : 4) + 2 * weeks;
+  const forgone = Math.round(capital * 0.05 * (hold / 365) * 100) / 100;
+  const minutes = 15 + 10 * weeks + 10 * Math.ceil(hold / 30) + 10 + 5;
+  const timeValue = Math.round((minutes / 60) * 10 * 100) / 100;
+  const total = Math.round((gas + forgone + timeValue) * 100) / 100;
+  return {
+    gas_usd: gas,
+    capital_usd: capital,
+    hold_days: hold,
+    time_minutes: minutes,
+    time_value_usd: timeValue,
+    forgone_yield_usd: forgone,
+    total_usd: total,
+    break_even_usd: total,
+    break_even_share: implied > 0 ? total / implied : 0,
+    cover_multiple: total > 0 ? Math.round((implied / total) * 10) / 10 : 0,
+  };
+}
+
 /** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
 const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
 
@@ -458,6 +702,14 @@ export function buildBoard(
     return { p, ...v };
   });
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
+  // The farm plan's cost, netted to its break-even: the share of the row's implied value the
+  // plan must return to cover what it costs. The verdict ranks that share against the board
+  // in thirds — the cheapest third to farm, the middle thin, the dearest skipped.
+  const costs = scored.map((s) => farmCost(s.p, s.age, s.implied));
+  const shares = costs.map((c) => c.break_even_share).sort((a, b) => a - b);
+  const cut1 = shares[Math.floor(shares.length / 3)] ?? 0;
+  const cut2 = shares[Math.floor((2 * shares.length) / 3)] ?? 0;
+  const verdictFor = (share: number): FarmCost['verdict'] => (share <= cut1 ? 'Farm' : share <= cut2 ? 'Thin' : 'Skip');
   return scored.map((s, i) => ({
     rank: i + 1,
     slug: s.p.slug,
@@ -482,6 +734,7 @@ export function buildBoard(
       age_days: s.age,
     },
     farm_steps: farmSteps(s.p, s.age).map(stepText),
+    farm: { ...costs[i]!, verdict: verdictFor(costs[i]!.break_even_share) },
   }));
 }
 
@@ -627,7 +880,7 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
 }
 
 /** A board row's compact form for data.js, with the farm plan generated in the page. */
-export function radarRow(row: BoardRow, watchlist: Set<string>, categoryRank: number): RadarRow {
+export function radarRow(row: BoardRow, watchlist: Set<string>, categoryRank: number, range: RankRange): RadarRow {
   return {
     rank: row.rank,
     slug: row.slug,
@@ -646,6 +899,10 @@ export function radarRow(row: BoardRow, watchlist: Set<string>, categoryRank: nu
     maturity_multiplier: row.model.maturity_multiplier,
     watchlist: watchlist.has(row.slug),
     category_rank: categoryRank,
+    rank_low: range.low,
+    rank_high: range.high,
+    rank_median: range.median,
+    farm: row.farm,
   };
 }
 
@@ -666,6 +923,8 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     seenByCategory.set(key, n);
     categoryRank.set(r.slug, n);
   }
+  // The bootstrap refits once here: its ranges go on every row, its summary in the panel.
+  const { ranges, summary } = bootstrapRankRanges(snapshot, board, model);
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
@@ -679,7 +938,9 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     category_multiples: multiples.byCategory,
     global_multiple: multiples.global,
     calibration: calibrate(snapshot, model),
-    rows: board.map((r) => radarRow(r, watchlist, categoryRank.get(r.slug) ?? 1)),
+    walk_forward: walkForward(snapshot, model),
+    bootstrap: summary,
+    rows: board.map((r) => radarRow(r, watchlist, categoryRank.get(r.slug) ?? 1, ranges.get(r.slug) ?? { low: r.rank, high: r.rank, median: r.rank })),
     live,
   };
   return { board, radar };

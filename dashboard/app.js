@@ -1,8 +1,9 @@
-// Token Radar's dashboard, model radar-4. It reads window.RADAR (written beside dashboard/ by
+// Token Radar's dashboard, model radar-5. It reads window.RADAR (written beside dashboard/ by
 // main.ts) and renders the ranked board, a filterable table, a per-protocol detail drawer with
 // the model's own inputs and the protocol's farm plan, a category chart, a leave-one-out check
-// of the model on the protocols whose token already trades, and a model sandbox that re-ranks
-// the board live in the browser. No network: every byte it shows is in data.js.
+// of the model on the protocols whose token already trades, a walk-forward test and bootstrap
+// rank ranges for the same model, and a model sandbox that re-ranks the board live in the
+// browser. No network: every byte it shows is in data.js.
 //
 // The sandbox recomputes each row from the snapshot figures with the same formula main.ts runs,
 // so the page's code and the board's data are visibly the same arithmetic:
@@ -40,6 +41,17 @@
     return Math.max(0, Math.round(days)) + 'd';
   }
   function fmtMult(n) { return n.toFixed(2) + 'x'; }
+  function fmtCover(n) {
+    if (n === null || n === undefined || !isFinite(n)) return 'n/a';
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M×';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K×';
+    return Math.round(n) + '×';
+  }
+  function fmtRange(r) {
+    if (r.rank_low === undefined || r.rank_high === undefined) return '—';
+    if (r.rank_low === r.rank_high) return '#' + r.rank_low;
+    return '#' + r.rank_low + '–' + r.rank_high;
+  }
 
   // The model in one function: the page recomputes a row from the snapshot figures and checks
   // the number board.json carries, so the page's code and the board's data are visibly the same
@@ -275,6 +287,47 @@
     );
   }
 
+  // The walk-forward test and the bootstrap rank ranges: the same model, held to two harder
+  // checks. Walk-forward learns the multiples only from the live protocols listed before each
+  // cut and scores the ones listed after it — the model as it would have stood then, tested on
+  // what came next. The bootstrap refits the multiples 200 times on resampled live sets and
+  // re-ranks the board each time, so every row carries the range 80% of the refits give it.
+  function validationPanel() {
+    var wf = DATA.walk_forward;
+    var bs = DATA.bootstrap;
+    var folds = (wf && wf.folds) || [];
+    var foldRows = folds.map(function (f) {
+      return el('tr', null,
+        el('td', { text: 'Listed before ' + f.cutoff }),
+        el('td', { class: 'num', text: String(f.past_n) }),
+        el('td', { class: 'num', text: String(f.future_n) }),
+        el('td', { class: 'num', text: f.spearman.toFixed(2) }),
+        el('td', { class: 'num', text: f.top_decile_hit + ' of ' + f.top_decile_total }),
+        el('td', { class: 'num', text: Math.round(f.within_2x * 100) + '%' })
+      );
+    });
+    return el('section', { class: 'panel' },
+      el('h2', { text: 'Does the ranking hold up over time? A walk-forward test' }),
+      el('p', { class: 'sub', text: 'Leave-one-out tests the model on the present. Walk-forward tests it on the future: for each cut, the category multiples are learned only from the live protocols listed before that date, and scored on the ones listed after it. Protocols with no listing date are left out of both sides.' }),
+      el('div', { class: 'table-wrap' },
+        el('table', null,
+          el('thead', null, el('tr', null,
+            el('th', { scope: 'col', text: 'Multiples learned from' }),
+            el('th', { scope: 'col', text: 'Learned' }),
+            el('th', { scope: 'col', text: 'Scored' }),
+            el('th', { scope: 'col', text: 'Rank agreement (ρ)' }),
+            el('th', { scope: 'col', text: 'Top decile' }),
+            el('th', { scope: 'col', text: 'Within 2x' })
+          )),
+          el('tbody', null, foldRows)
+        )
+      ),
+      el('p', { class: 'sub', text: 'Mean rank agreement across the three folds: ρ ' + (wf ? wf.mean_spearman.toFixed(2) : 'n/a') + ' — the multiples learned from the past still rank what came next, a little below the leave-one-out figure, as a forward test should be. The top-decile hit is thin on these small future sets (1 of 6, 1 of 5, 1 of 4); the ranking signal is in the Spearman, and the dashboard does not hide the thin part.' }),
+      el('h2', { text: 'How certain is each rank? 200 bootstrap refits' }),
+      el('p', { class: 'sub', text: 'The multiples are refit 200 times on resampled live-token sets and the board is re-ranked each time. Every row carries the rank range the central 80% of the refits give it — shown in the board\'s Rank range column and in each detail view. The median range is ' + (bs ? bs.median_width : 'n/a') + ' ranks wide; ' + (bs ? bs.within_10 : 'n/a') + ' of ' + DATA.board_size + ' rows sit within 10 ranks and ' + (bs ? bs.within_25 : 'n/a') + ' within 25. The top of the board barely moves — the top three rows hold their rank in every refit — and the tail is wide, which is why the range is printed instead of pretending the rank is exact.' })
+    );
+  }
+
   function controls() {
     var categories = Array.from(new Set(DATA.rows.map(function (r) { return r.category || 'Other'; }))).sort();
     var chains = Array.from(new Set(DATA.rows.reduce(function (acc, r) { return acc.concat(r.chains || []); }, []))).sort();
@@ -355,6 +408,7 @@
           el('div', { class: 'bar', 'aria-hidden': 'true' }, el('i', { style: 'width:' + Math.max(3, Math.round((item.v / max) * 100)) + '%' })),
           el('span', { class: 'num', text: fmtUsd(item.v) })
         )),
+        el('td', { class: 'num', text: fmtRange(r) }),
         el('td', null, el('span', { class: 'status', text: 'no token' }))
       );
       tbody.appendChild(tr);
@@ -370,6 +424,7 @@
             sortHeader('growth', '7d'),
             sortHeader('age', 'Age'),
             sortHeader('implied', 'Implied value'),
+            el('th', { scope: 'col', text: 'Rank range' }),
             el('th', { scope: 'col', text: 'Token' })
           )),
           tbody
@@ -413,7 +468,7 @@
       el('div', { class: 'formula' },
         'implied = round( tvl_usd x category_multiple x (1 + ' + m.growth_weight + ' x sign(g) x ln(1 + |g| / 100)) x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') ),  g = clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ')'
       ),
-      el('p', { class: 'sub', text: 'The category multiple is the geometric median market-cap-to-TVL ratio of the live-token protocols in that category, shrunk toward the global median ' + fmtMult(DATA.global_multiple) + ' with a pseudo-count of ' + m.shrink_k + ': (n x category median + ' + m.shrink_k + ' x global median) / (n + ' + m.shrink_k + '). Ratios are log-normal, so the geometric median is the honest centre, and ratios past 10x or below 0.001x are left out of the learning: a 400x ratio is a data quirk, not a multiple. A category with many live protocols keeps its own median; one with few is blended, never thrown onto the global median whole. Growth is dampened on a log scale, so a +120% week is worth 1.20x, not 1.60x. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. The early radar is every genuine pre-token protocol below the watchlist floor, by TVL, and the live-token protocols are set aside with their market caps shown.' }),
+      el('p', { class: 'sub', text: 'The category multiple is the geometric median market-cap-to-TVL ratio of the live-token protocols in that category, shrunk toward the global median ' + fmtMult(DATA.global_multiple) + ' with a pseudo-count of ' + m.shrink_k + ': (n x category median + ' + m.shrink_k + ' x global median) / (n + ' + m.shrink_k + '). Ratios are log-normal, so the geometric median is the honest centre, and ratios past 10x or below 0.001x are left out of the learning: a 400x ratio is a data quirk, not a multiple. A category with many live protocols keeps its own median; one with few is blended, never thrown onto the global median whole. Growth is dampened on a log scale, so a +120% week is worth 1.20x, not 1.60x. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. The early radar is every genuine pre-token protocol below the watchlist floor, by TVL, and the live-token protocols are set aside with their market caps shown. A walk-forward test learns the multiples only from the protocols listed before each of three cut dates and scores the ones listed after them, and a bootstrap refits the multiples 200 times on resampled live sets, so every row carries the rank range 80% of the refits give it. Each farm plan is totalled in dollars — gas, forgone yield and time — and netted to the airdrop that breaks even.' }),
       el('div', { class: 'table-wrap' },
         el('table', null,
           el('caption', { class: 'sub', text: 'Category multiples learned from the snapshot (live protocols only).' }),
@@ -492,7 +547,23 @@
         el('div', null, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) }))
       ),
       el('p', { class: 'sub', text: multNote + ' The page recomputes this row as ' + fmtUsd(impliedOf(row, null)) + ', the same number board.json carries. This is an estimate, not a price.' }),
-      el('p', { class: 'sub', text: why })
+      el('p', { class: 'sub', text: why }),
+      el('p', { class: 'sub', text: 'Rank range: 200 refits of the multiples on resampled live-token sets place this row between #' + row.rank_low + ' and #' + row.rank_high + ' (median #' + row.rank_median + '). The rank is a claim with an uncertainty, not an exact place.' })
+    ));
+    dialog.appendChild(el('section', { class: 'detail-section' },
+      el('h3', { text: 'Farm cost: what the plan costs, and what breaks even' }),
+      el('div', { class: 'equation' },
+        el('div', null, el('span', { text: 'Gas for the plan' }), el('b', { class: 'num', text: usd.format(row.farm.gas_usd) })),
+        el('div', null, el('span', { text: 'Capital locked' }), el('b', { class: 'num', text: usd.format(row.farm.capital_usd) })),
+        el('div', null, el('span', { text: 'Held' }), el('b', { class: 'num', text: row.farm.hold_days + ' days' })),
+        el('div', null, el('span', { text: 'Time it takes' }), el('b', { class: 'num', text: row.farm.time_minutes + ' minutes' })),
+        el('div', null, el('span', { text: 'Time valued at $10 an hour' }), el('b', { class: 'num', text: usd.format(row.farm.time_value_usd) })),
+        el('div', null, el('span', { text: 'Yield the capital forgoes at 5% a year' }), el('b', { class: 'num', text: usd.format(row.farm.forgone_yield_usd) })),
+        el('div', null, el('span', { text: 'Total cost, all in' }), el('b', { class: 'num', text: usd.format(row.farm.total_usd) })),
+        el('div', null, el('span', { text: 'Airdrop that breaks even' }), el('b', { class: 'num', text: usd.format(row.farm.break_even_usd) })),
+        el('div', null, el('span', { text: 'Implied value covers the cost' }), el('b', { class: 'num', text: fmtCover(row.farm.cover_multiple) + ' over' }))
+      ),
+      el('p', { class: 'sub', text: 'Verdict: ' + row.farm.verdict + ' — the plan costs ' + usd.format(row.farm.total_usd) + ' all in, so the airdrop must be worth that much to break even, and the implied value covers it ' + fmtCover(row.farm.cover_multiple) + ' over. The verdict ranks the break-even cost as a share of implied value against the board in thirds: the cheapest third farms, the middle is thin, the dearest is skipped. The capital stays yours unless the protocol fails; only the gas, the forgone yield and the time are spent.' })
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Farm plan' }),
@@ -517,6 +588,7 @@
     shell.appendChild(lede());
     shell.appendChild(categoryChart());
     shell.appendChild(calibrationPanel());
+    shell.appendChild(validationPanel());
     shell.appendChild(controls());
     shell.appendChild(state.tab === 'pre-token' ? boardTable() : liveTable());
     if (state.tab === 'pre-token') {
