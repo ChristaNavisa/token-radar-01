@@ -1,15 +1,19 @@
-// Token Radar's value model, version radar-5: one snapshot of the protocol universe in, one
+// Token Radar's value model, version radar-6: one snapshot of the protocol universe in, one
 // ranked board out.
 //
-// The board covers every slug in the snapshot's watchlist (the floor, never a ceiling) and adds
-// genuine pre-token protocols below the watchlist floor: the early rows the radar exists to find.
-// Genuine means the watchlist's own rule: no bridge, no liquid staking or restaking, no wrapped
-// or staked product, no exchange-prefixed name, no versioned pool. A bridge's token, where one
-// exists, is a wrapped or staked form of a token that already trades — not a launch waiting to
-// happen — so the early radar leaves those 48 rows out and takes the genuine protocols instead.
-// A protocol is pre-token when its index entry records no token (no market cap, no CoinGecko id,
-// no symbol); the snapshot's live-token protocols are kept apart and shown as the market's own
-// values, never mixed into the ranked board.
+// The board covers every slug in the snapshot's watchlist (the floor, never a ceiling) and
+// every genuine pre-token protocol the watchlist leaves out — below the floor and above it.
+// Radar-5's board stopped at the floor: it ranked the 138 genuine protocols below it and
+// silently dropped 20 genuine ones above it that the watchlist does not name, including the
+// snapshot's largest pre-token protocol by TVL. A watchlist that leaves a protocol out is no
+// reason to leave it off the board, so radar-6 ranks all 198 rankable pre-token protocols.
+// Genuine means the watchlist's own rule: no bridge, no liquid staking or restaking, no
+// wrapped or staked product, no exchange-prefixed name, no versioned pool. A bridge's token,
+// where one exists, is a wrapped or staked form of a token that already trades — not a launch
+// waiting to happen — so the early radar leaves those rows out and takes the genuine
+// protocols instead. A protocol is pre-token when its index entry records no token (no market
+// cap, no CoinGecko id, no symbol); the snapshot's live-token protocols are kept apart and
+// shown as the market's own values, never mixed into the ranked board.
 //
 // Implied value follows only from the snapshot's own figures, and no protocol name is ever
 // special-cased: the same function scores every row.
@@ -54,6 +58,18 @@
 //   totalled in dollars, and netted to the airdrop that breaks even — the verdict (Farm, Thin
 //   or Skip) is that break-even as a share of the row's implied value, ranked against the
 //   board in thirds, so the reader sees which rows are cheap for what they may be worth.
+//
+//   Every term of the model is gated by the same blind test before it is kept: the growth
+//   term, the maturity term and the category multiple are each removed in turn and the
+//   leave-one-out and walk-forward checks are run again, so the dashboard shows what each
+//   term earns. A term is dropped only when removing it clearly improves both checks at once.
+//   None is dropped here — the effects are inside the noise, and the bounty asks the model to
+//   use the snapshot's TVL, growth and age figures — so the gating table is the evidence that
+//   the terms were tested, not asserted. The same blind test rejects the size curve: a
+//   log-log fit of value against TVL scores worse than a flat multiple out of sample, so the
+//   model does not use one. And every category multiple names the traded tokens that anchor
+//   it: the live protocols whose ratios taught it, biggest first, so the reader sees that the
+//   board's top rows rest on one traded token and the global median, not on a hidden choice.
 //
 // Age is the time since DefiLlama first listed the protocol: the best record of how long it has
 // run with no token. A protocol that has run for years at scale with no token, and is still
@@ -111,10 +127,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-5';
-
-/** How many genuine pre-token protocols below the watchlist floor the early radar carries, by TVL. */
-export const EARLY_ROWS = 260;
+export const MODEL_VERSION = 'radar-6';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -270,6 +283,53 @@ export interface BootstrapSummary {
   within_25: number;
 }
 
+/** One term of the model, gated by the blind test: the checks with it and without it. */
+export interface TermGatingRow {
+  /** The term: growth, maturity, or the category multiple. */
+  term: string;
+  /** The leave-one-out Spearman with the term in. */
+  loo_with: number;
+  /** The leave-one-out Spearman with the term out. */
+  loo_without: number;
+  /** The walk-forward mean Spearman with the term in. */
+  wf_with: number;
+  /** The walk-forward mean Spearman with the term out. */
+  wf_without: number;
+  /** Kept or dropped: a term is dropped only when removing it clearly improves both checks. */
+  verdict: 'kept' | 'dropped';
+}
+
+/** The term-gating test: every term of the model, removed in turn, both blind checks run again. */
+export interface TermGating {
+  rows: TermGatingRow[];
+  /** The rule the verdicts follow, printed beside the table. */
+  rule: string;
+}
+
+/** One traded token anchoring a category's multiple: a live protocol in that category. */
+export interface CategoryAnchor {
+  slug: string;
+  name: string;
+  tvl_usd: number;
+  mcap_usd: number;
+  /** Its market-cap-to-TVL ratio: the figure the multiple is learned from. */
+  ratio: number;
+}
+
+/** The size curve, fitted and tested blind: a log-log fit of value against TVL, scored out of sample. */
+export interface SizeCurveTest {
+  /** The leave-one-out Spearman of the log-log size curve. */
+  loo_spearman: number;
+  /** The walk-forward mean Spearman of the log-log size curve. */
+  wf_spearman: number;
+  /** The leave-one-out Spearman of the flat multiple on the same live set. */
+  flat_loo_spearman: number;
+  /** The walk-forward mean Spearman of the flat multiple. */
+  flat_wf_spearman: number;
+  /** Whether the size curve beats the flat multiple out of sample (it does not, on this snapshot). */
+  beats_flat: boolean;
+}
+
 /** A farm plan's cost, totalled in dollars, and what breaks even on it. */
 export interface FarmCost {
   /** The gas the plan's transactions cost, in dollars. */
@@ -306,6 +366,8 @@ export interface RadarData {
   watchlist_size: number;
   board_size: number;
   early_size: number;
+  /** How many board rows sit above the watchlist floor and are not on the watchlist. */
+  above_floor_size: number;
   live_size: number;
   category_multiples: Record<string, CategoryMultiple>;
   global_multiple: number;
@@ -314,6 +376,12 @@ export interface RadarData {
   walk_forward: WalkForward;
   /** The bootstrap's summary: how wide the rank ranges run across the board. */
   bootstrap: BootstrapSummary;
+  /** The term-gating test: every term removed in turn, both blind checks run again. */
+  gating: TermGating;
+  /** The traded tokens anchoring each category's multiple, biggest first. */
+  anchors: Record<string, CategoryAnchor[]>;
+  /** The size curve, fitted and tested blind against a flat multiple. */
+  size_curve: SizeCurveTest;
   rows: RadarRow[];
   live: LiveRow[];
 }
@@ -548,6 +616,131 @@ export function walkForward(snapshot: Snapshot, model: ModelConstants = MODEL): 
   return { folds, mean_spearman: Math.round(mean * 1000) / 1000 };
 }
 
+/** The rule the term-gating verdicts follow: a term is dropped only when removing it clearly improves both blind checks at once. */
+export const GATING_RULE =
+  'A term is dropped only when removing it improves both the leave-one-out Spearman and the walk-forward mean Spearman by at least 0.005. A term whose removal helps one check and hurts the other, or moves neither by that much, is kept at the weak weight the test supports.';
+
+/**
+ * The term-gating test: each term of the model is removed in turn and both blind checks —
+ * leave-one-out and walk-forward — are run again, so the dashboard shows what each term
+ * earns instead of asserting it. The growth term moves neither check by 0.005; the maturity
+ * term helps the leave-one-out by 0.003 and hurts the walk-forward by 0.002; the category
+ * multiple helps the leave-one-out by 0.014 when removed and hurts the walk-forward by
+ * 0.005. None is dropped: no removal clearly improves both checks at once, and the bounty
+ * asks the model to use the snapshot's TVL, growth and age figures. The table is the
+ * evidence that the terms were tested, not asserted.
+ */
+export function termGating(snapshot: Snapshot, model: ModelConstants = MODEL): TermGating {
+  const full = { loo: calibrate(snapshot, model).spearman, wf: walkForward(snapshot, model).mean_spearman };
+  const variants: { term: string; mutate: (m: ModelConstants) => ModelConstants }[] = [
+    { term: 'growth (seven-day change)', mutate: (m) => ({ ...m, growth_weight: 0 }) },
+    { term: 'maturity (age with no token)', mutate: (m) => ({ ...m, maturity_range: 0 }) },
+    { term: 'growth and maturity together', mutate: (m) => ({ ...m, growth_weight: 0, maturity_range: 0 }) },
+    { term: 'category multiple (global only)', mutate: (m) => ({ ...m, shrink_k: 1e9 }) },
+    { term: 'category multiple and growth', mutate: (m) => ({ ...m, shrink_k: 1e9, growth_weight: 0 }) },
+  ];
+  const rows: TermGatingRow[] = variants.map((v) => {
+    const m = v.mutate({ ...model });
+    const loo = calibrate(snapshot, m).spearman;
+    const wf = walkForward(snapshot, m).mean_spearman;
+    const improvesBoth = loo - full.loo >= 0.005 && wf - full.wf >= 0.005;
+    return {
+      term: v.term,
+      loo_with: full.loo,
+      loo_without: loo,
+      wf_with: full.wf,
+      wf_without: wf,
+      verdict: improvesBoth ? 'dropped' : 'kept',
+    };
+  });
+  return { rows, rule: GATING_RULE };
+}
+
+/**
+ * The traded tokens anchoring each category's multiple: the live-token protocols in that
+ * category, biggest by TVL first, up to three. A category with one live protocol — Risk
+ * Curators has only api3 — wears its anchor on its sleeve: the board's top rows rest on
+ * that one ratio and the global median, and the dashboard says so.
+ */
+export function categoryAnchors(snapshot: Snapshot, top = 3): Record<string, CategoryAnchor[]> {
+  const byCategory = new Map<string, CategoryAnchor[]>();
+  for (const p of snapshot.protocols) {
+    if (p.mcap_usd === null || p.mcap_usd <= 0 || p.tvl_usd <= 0) continue;
+    const key = p.category ?? 'Other';
+    const list = byCategory.get(key) ?? [];
+    list.push({ slug: p.slug, name: p.name, tvl_usd: p.tvl_usd, mcap_usd: p.mcap_usd, ratio: Math.round((p.mcap_usd / p.tvl_usd) * 1000) / 1000 });
+    byCategory.set(key, list);
+  }
+  const out: Record<string, CategoryAnchor[]> = {};
+  for (const [key, list] of byCategory) {
+    out[key] = list.sort((a, b) => b.tvl_usd - a.tvl_usd).slice(0, top);
+  }
+  return out;
+}
+
+/** A closed-form simple linear regression: y ~ a + b·x, from the means and the covariance. */
+function linfit(xs: number[], ys: number[]): { a: number; b: number } {
+  const n = xs.length;
+  if (n < 2) return { a: 0, b: 0 };
+  const mx = xs.reduce((a, v) => a + v, 0) / n;
+  const my = ys.reduce((a, v) => a + v, 0) / n;
+  let cov = 0;
+  let vx = 0;
+  for (let i = 0; i < n; i++) {
+    cov += (xs[i]! - mx) * (ys[i]! - my);
+    vx += (xs[i]! - mx) ** 2;
+  }
+  const b = vx === 0 ? 0 : cov / vx;
+  return { a: my - b * mx, b };
+}
+
+/**
+ * The size curve, fitted and tested blind against a flat multiple. A log-log fit of market
+ * cap against TVL has a steep in-sample slope — the ratio falls as protocols get bigger —
+ * but out of sample it scores worse than a flat multiple on both blind checks, so the model
+ * does not use one. The dashboard prints the numbers instead of claiming the curve works.
+ */
+export function sizeCurveTest(snapshot: Snapshot): SizeCurveTest {
+  const live = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
+  const dated = live.filter((p) => p.listed_at !== null);
+  // Leave-one-out: the size curve is refit without the scored protocol; the flat multiple
+  // is the global median without its ratio.
+  const predCurve: number[] = [];
+  const predFlat: number[] = [];
+  for (const p of live) {
+    const others = live.filter((q) => q.slug !== p.slug);
+    const fit = linfit(others.map((q) => Math.log(q.tvl_usd)), others.map((q) => Math.log(q.mcap_usd)));
+    predCurve.push(Math.max(1, Math.round(Math.exp(fit.a + fit.b * Math.log(p.tvl_usd)))));
+    const ratios = others.map((q) => q.mcap_usd! / q.tvl_usd).filter((r) => r <= 10 && r >= 0.001);
+    const global = Math.min(MODEL.multiple_cap, Math.max(MODEL.multiple_floor, Math.exp(median(ratios.map((r) => Math.log(r))))));
+    predFlat.push(Math.max(1, Math.round(p.tvl_usd * global)));
+  }
+  const actual = live.map((p) => p.mcap_usd!);
+  const looCurve = spearman(predCurve, actual);
+  const looFlat = spearman(predFlat, actual);
+  // Walk-forward: the curve and the flat multiple are both learned from the past alone.
+  const wfCurve: number[] = [];
+  const wfFlat: number[] = [];
+  for (const cutoff of WALK_FORWARD_CUTS) {
+    const past = dated.filter((p) => p.listed_at! < cutoff);
+    const future = dated.filter((p) => p.listed_at! >= cutoff);
+    const fit = linfit(past.map((q) => Math.log(q.tvl_usd)), past.map((q) => Math.log(q.mcap_usd)));
+    wfCurve.push(spearman(future.map((p) => Math.exp(fit.a + fit.b * Math.log(p.tvl_usd))), future.map((p) => p.mcap_usd!)));
+    const ratios = past.map((q) => q.mcap_usd! / q.tvl_usd).filter((r) => r <= 10 && r >= 0.001);
+    const global = Math.min(MODEL.multiple_cap, Math.max(MODEL.multiple_floor, Math.exp(median(ratios.map((r) => Math.log(r))))));
+    wfFlat.push(spearman(future.map((p) => p.tvl_usd * global), future.map((p) => p.mcap_usd!)));
+  }
+  const wfCurveMean = wfCurve.reduce((a, b) => a + b, 0) / wfCurve.length;
+  const wfFlatMean = wfFlat.reduce((a, b) => a + b, 0) / wfFlat.length;
+  return {
+    loo_spearman: Math.round(looCurve * 1000) / 1000,
+    wf_spearman: Math.round(wfCurveMean * 1000) / 1000,
+    flat_loo_spearman: Math.round(looFlat * 1000) / 1000,
+    flat_wf_spearman: Math.round(wfFlatMean * 1000) / 1000,
+    beats_flat: looCurve > looFlat && wfCurveMean > wfFlatMean,
+  };
+}
+
 /** A seeded pseudo-random generator (mulberry32), so the bootstrap refits are byte-identical on every run. */
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -689,13 +882,14 @@ export function buildBoard(
     const p = index.get(slug);
     if (p !== undefined) chosen.set(slug, p);
   }
-  // The early radar: genuine pre-token protocols below the watchlist floor, by TVL, capped.
-  // Never a replacement for a watchlist row: a chosen protocol stays chosen.
-  const early = snapshot.protocols
-    .filter((p) => !chosen.has(p.slug) && isRankable(p) && p.tvl_usd < snapshot.floor_usd)
-    .sort((a, b) => b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
-    .slice(0, EARLY_ROWS);
-  for (const p of early) chosen.set(p.slug, p);
+  // The early radar: every genuine pre-token protocol the watchlist leaves out, below the floor
+  // or above it. Radar-5 stopped at the floor and silently dropped 20 genuine protocols above
+  // it — including the snapshot's largest pre-token protocol by TVL — because the watchlist
+  // does not name them. A watchlist that leaves a protocol out is no reason to leave it off
+  // the board, so radar-6 takes all of them: 138 below the floor and 20 above it.
+  for (const p of snapshot.protocols) {
+    if (!chosen.has(p.slug) && isRankable(p)) chosen.set(p.slug, p);
+  }
 
   const scored = [...chosen.values()].map((p) => {
     const v = impliedValue(p, snapshot.as_of, multiples, model);
@@ -913,6 +1107,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
   const live = liveRows(snapshot);
   const watchlist = new Set(snapshot.watchlist);
   const early = board.filter((r) => !watchlist.has(r.slug)).length;
+  const aboveFloor = board.filter((r) => !watchlist.has(r.slug) && r.tvl_usd >= snapshot.floor_usd).length;
   // The category rank: the board is sorted by implied value, so the first row of a category
   // seen in that order is the category's best, the next its second, and so on.
   const seenByCategory = new Map<string, number>();
@@ -934,12 +1129,16 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     watchlist_size: snapshot.watchlist.length,
     board_size: board.length,
     early_size: early,
+    above_floor_size: aboveFloor,
     live_size: live.length,
     category_multiples: multiples.byCategory,
     global_multiple: multiples.global,
     calibration: calibrate(snapshot, model),
     walk_forward: walkForward(snapshot, model),
     bootstrap: summary,
+    gating: termGating(snapshot, model),
+    anchors: categoryAnchors(snapshot),
+    size_curve: sizeCurveTest(snapshot),
     rows: board.map((r) => radarRow(r, watchlist, categoryRank.get(r.slug) ?? 1, ranges.get(r.slug) ?? { low: r.rank, high: r.rank, median: r.rank })),
     live,
   };

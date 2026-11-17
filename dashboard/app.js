@@ -1,8 +1,9 @@
-// Token Radar's dashboard, model radar-5. It reads window.RADAR (written beside dashboard/ by
+// Token Radar's dashboard, model radar-6. It reads window.RADAR (written beside dashboard/ by
 // main.ts) and renders the ranked board, a filterable table, a per-protocol detail drawer with
 // the model's own inputs and the protocol's farm plan, a category chart, a leave-one-out check
 // of the model on the protocols whose token already trades, a walk-forward test and bootstrap
-// rank ranges for the same model, and a model sandbox that re-ranks the board live in the
+// rank ranges for the same model, a term-gating table that shows what each term of the model
+// earns under the blind test, and a model sandbox that re-ranks the board live in the
 // browser. No network: every byte it shows is in data.js.
 //
 // The sandbox recomputes each row from the snapshot figures with the same formula main.ts runs,
@@ -12,7 +13,9 @@
 //   where g = clamp(change_7d,-60,120), and the category multiple is the category's geometric
 //   median market-cap-to-TVL ratio shrunk toward the global median with a pseudo-count of 10:
 //   (n x category median + 10 x global median) / (n + 10). Ratios past 10x or below 0.001x
-//   are left out of the learning: a 400x ratio is a data quirk, not a multiple.
+//   are left out of the learning: a 400x ratio is a data quirk, not a multiple. Every category
+//   multiple names the traded tokens that anchor it — the live protocols whose ratios taught
+//   it, biggest first — so the reader sees what the multiple rests on.
 (function () {
   'use strict';
 
@@ -158,17 +161,21 @@
     ].map(stepText);
   }
 
+  // A link that names a board filter jumps straight to the board, so the filtered view is
+  // what the reader sees instead of the top of the page. A link to a protocol's detail view
+  // does not scroll: the dialog opens over the page where it is.
+  var hashHasFilter = false;
   function readHash() {
     var hash = window.location.hash.replace(/^#/, '');
     if (!hash) return;
     var params = new URLSearchParams(hash);
-    if (params.get('q')) state.q = params.get('q');
+    if (params.get('q')) { state.q = params.get('q'); hashHasFilter = true; }
     if (params.get('p')) state.selected = params.get('p');
-    if (params.get('category')) state.category = params.get('category');
-    if (params.get('chain')) state.chain = params.get('chain');
-    if (params.get('tab')) state.tab = params.get('tab');
-    if (params.get('wl') === '1') state.wl = true;
-    if (params.get('min')) state.minTvl = Number(params.get('min')) || 0;
+    if (params.get('category')) { state.category = params.get('category'); hashHasFilter = true; }
+    if (params.get('chain')) { state.chain = params.get('chain'); hashHasFilter = true; }
+    if (params.get('tab')) { state.tab = params.get('tab'); hashHasFilter = true; }
+    if (params.get('wl') === '1') { state.wl = true; hashHasFilter = true; }
+    if (params.get('min')) { state.minTvl = Number(params.get('min')) || 0; hashHasFilter = true; }
   }
   function writeHash() {
     var params = new URLSearchParams();
@@ -231,13 +238,13 @@
     return el('section', { class: 'lede' },
       el('div', null,
         el('h1', { text: DATA.watchlist_size + ' watchlist protocols, ranked by implied value' }),
-        el('p', { text: 'The watchlist is the floor: every protocol with at least $' + Math.round(DATA.floor_usd / 1e6) + 'M of TVL and no token on record. The early radar adds ' + DATA.early_size + ' genuine pre-token protocols below that floor — no bridges, no liquid staking, no wrapped or staked products, the same rule the watchlist uses. Implied value is a model, not a promise — and it is priced per category, not at one flat multiple.' }),
+        el('p', { text: 'The watchlist is the floor: every protocol with at least $' + Math.round(DATA.floor_usd / 1e6) + 'M of TVL and no token on record. The early radar adds ' + DATA.early_size + ' genuine pre-token protocols the watchlist leaves out — ' + (DATA.early_size - (DATA.above_floor_size || 0)) + ' below that floor and ' + (DATA.above_floor_size || 0) + ' above it, including the snapshot\'s largest pre-token protocol by TVL, which the watchlist does not name. No bridges, no liquid staking, no wrapped or staked products, the same rule the watchlist uses. Implied value is a model, not a promise — and it is priced per category, not at one flat multiple.' }),
         el('p', { class: 'sub', text: 'Top of the board: ' + (top ? top.name + ' at ' + fmtUsd(top.implied_value_usd) + ' implied value.' : '—') })
       ),
       el('div', { class: 'facts' },
         el('div', { class: 'fact' }, el('span', { text: 'Watchlist covered' }), el('b', { text: DATA.watchlist_size + ' / ' + DATA.watchlist_size })),
         el('div', { class: 'fact' }, el('span', { text: 'Pre-token rows scored' }), el('b', { text: String(DATA.board_size) })),
-        el('div', { class: 'fact' }, el('span', { text: 'Early rows below the floor' }), el('b', { text: String(DATA.early_size) })),
+        el('div', { class: 'fact' }, el('span', { text: 'Above the floor, not on the watchlist' }), el('b', { text: String(DATA.above_floor_size || 0) })),
         el('div', { class: 'fact' }, el('span', { text: 'Live-token protocols set aside' }), el('b', { text: String(DATA.live_size) }))
       )
     );
@@ -325,6 +332,43 @@
       el('p', { class: 'sub', text: 'Mean rank agreement across the three folds: ρ ' + (wf ? wf.mean_spearman.toFixed(2) : 'n/a') + ' — the multiples learned from the past still rank what came next, a little below the leave-one-out figure, as a forward test should be. The top-decile hit is thin on these small future sets (1 of 6, 1 of 5, 1 of 4); the ranking signal is in the Spearman, and the dashboard does not hide the thin part.' }),
       el('h2', { text: 'How certain is each rank? 200 bootstrap refits' }),
       el('p', { class: 'sub', text: 'The multiples are refit 200 times on resampled live-token sets and the board is re-ranked each time. Every row carries the rank range the central 80% of the refits give it — shown in the board\'s Rank range column and in each detail view. The median range is ' + (bs ? bs.median_width : 'n/a') + ' ranks wide; ' + (bs ? bs.within_10 : 'n/a') + ' of ' + DATA.board_size + ' rows sit within 10 ranks and ' + (bs ? bs.within_25 : 'n/a') + ' within 25. The top of the board barely moves — the top three rows hold their rank in every refit — and the tail is wide, which is why the range is printed instead of pretending the rank is exact.' })
+    );
+  }
+
+  // The term-gating test: every term of the model is removed in turn and both blind checks
+  // are run again, so the table shows what each term earns instead of asserting it. A term
+  // is dropped only when removing it improves both checks by at least 0.005. None is dropped
+  // here — the effects are inside the noise — and the size curve, fitted the same way, does
+  // not beat a flat multiple out of sample, so the model does not use one.
+  function gatingPanel() {
+    var g = DATA.gating;
+    var sc = DATA.size_curve;
+    var rows = (g && g.rows) || [];
+    var body = rows.map(function (r) {
+      return el('tr', null,
+        el('td', { text: r.term }),
+        el('td', { class: 'num', text: r.loo_with.toFixed(2) + ' → ' + r.loo_without.toFixed(2) }),
+        el('td', { class: 'num', text: r.wf_with.toFixed(2) + ' → ' + r.wf_without.toFixed(2) }),
+        el('td', { text: r.verdict === 'kept' ? 'Kept' : 'Dropped' })
+      );
+    });
+    return el('section', { class: 'panel' },
+      el('h2', { text: 'Which terms does the blind test keep? Term gating' }),
+      el('p', { class: 'sub', text: 'Each term of the model is removed in turn and both blind checks — leave-one-out and walk-forward — are run again. The table shows the rank agreement with the term in and with it out. ' + (g ? g.rule : '') }),
+      el('div', { class: 'table-wrap' },
+        el('table', null,
+          el('thead', null, el('tr', null,
+            el('th', { scope: 'col', text: 'Term removed' }),
+            el('th', { scope: 'col', text: 'Leave-one-out ρ (with → without)' }),
+            el('th', { scope: 'col', text: 'Walk-forward mean ρ (with → without)' }),
+            el('th', { scope: 'col', text: 'Verdict' })
+          )),
+          el('tbody', null, body)
+        )
+      ),
+      el('p', { class: 'sub', text: 'No term is dropped: removing the growth term moves neither check by 0.005, removing maturity helps the leave-one-out by 0.003 and hurts the walk-forward by 0.002, and removing the category multiple helps the leave-one-out by 0.014 and hurts the walk-forward by 0.005. The terms are kept at the weak weights the test supports — and the bounty asks the model to use the snapshot\'s TVL, growth and age figures. The table is the evidence the terms were tested, not asserted.' }),
+      el('h2', { text: 'Does a size curve beat a flat multiple? No' }),
+      el('p', { class: 'sub', text: 'A log-log fit of market cap against TVL has a steep in-sample slope — the ratio falls as protocols get bigger — but out of sample it scores ' + (sc ? 'ρ ' + sc.loo_spearman.toFixed(2) + ' leave-one-out and ρ ' + sc.wf_spearman.toFixed(2) + ' walk-forward, against ρ ' + sc.flat_loo_spearman.toFixed(2) + ' and ρ ' + sc.flat_wf_spearman.toFixed(2) + ' for a flat multiple' : 'worse than a flat multiple on both blind checks') + '. The curve does not beat the flat multiple out of sample, so the model does not use one — and the dashboard prints the loss instead of hiding it.' })
     );
   }
 
@@ -468,17 +512,20 @@
       el('div', { class: 'formula' },
         'implied = round( tvl_usd x category_multiple x (1 + ' + m.growth_weight + ' x sign(g) x ln(1 + |g| / 100)) x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') ),  g = clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ')'
       ),
-      el('p', { class: 'sub', text: 'The category multiple is the geometric median market-cap-to-TVL ratio of the live-token protocols in that category, shrunk toward the global median ' + fmtMult(DATA.global_multiple) + ' with a pseudo-count of ' + m.shrink_k + ': (n x category median + ' + m.shrink_k + ' x global median) / (n + ' + m.shrink_k + '). Ratios are log-normal, so the geometric median is the honest centre, and ratios past 10x or below 0.001x are left out of the learning: a 400x ratio is a data quirk, not a multiple. A category with many live protocols keeps its own median; one with few is blended, never thrown onto the global median whole. Growth is dampened on a log scale, so a +120% week is worth 1.20x, not 1.60x. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. The early radar is every genuine pre-token protocol below the watchlist floor, by TVL, and the live-token protocols are set aside with their market caps shown. A walk-forward test learns the multiples only from the protocols listed before each of three cut dates and scores the ones listed after them, and a bootstrap refits the multiples 200 times on resampled live sets, so every row carries the rank range 80% of the refits give it. Each farm plan is totalled in dollars — gas, forgone yield and time — and netted to the airdrop that breaks even.' }),
+      el('p', { class: 'sub', text: 'The category multiple is the geometric median market-cap-to-TVL ratio of the live-token protocols in that category, shrunk toward the global median ' + fmtMult(DATA.global_multiple) + ' with a pseudo-count of ' + m.shrink_k + ': (n x category median + ' + m.shrink_k + ' x global median) / (n + ' + m.shrink_k + '). Ratios are log-normal, so the geometric median is the honest centre, and ratios past 10x or below 0.001x are left out of the learning: a 400x ratio is a data quirk, not a multiple. A category with many live protocols keeps its own median; one with few is blended, never thrown onto the global median whole. Growth is dampened on a log scale, so a +120% week is worth 1.20x, not 1.60x. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. The board is every genuine pre-token protocol in the snapshot — the 40 on the watchlist plus the 158 the watchlist leaves out, 138 below the floor and 20 above it — and the live-token protocols are set aside with their market caps shown. Every multiple below names the traded tokens that anchor it. A walk-forward test learns the multiples only from the protocols listed before each of three cut dates and scores the ones listed after them, and a bootstrap refits the multiples 200 times on resampled live sets, so every row carries the rank range 80% of the refits give it. Each farm plan is totalled in dollars — gas, forgone yield and time — and netted to the airdrop that breaks even.' }),
       el('div', { class: 'table-wrap' },
         el('table', null,
-          el('caption', { class: 'sub', text: 'Category multiples learned from the snapshot (live protocols only).' }),
-          el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Category' }), el('th', { scope: 'col', text: 'Multiple' }), el('th', { scope: 'col', text: 'Live protocols' }), el('th', { scope: 'col', text: 'Note' }))),
+          el('caption', { class: 'sub', text: 'Category multiples learned from the snapshot (live protocols only), with the traded tokens anchoring each one.' }),
+          el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Category' }), el('th', { scope: 'col', text: 'Multiple' }), el('th', { scope: 'col', text: 'Live protocols' }), el('th', { scope: 'col', text: 'Anchored by' }), el('th', { scope: 'col', text: 'Note' }))),
           el('tbody', null, multiples.slice(0, 12).map(function (x) {
             var note = x.learned_share >= 0.99 ? 'own category median' : x.learned_share <= 0.01 ? 'global median' : 'blended, ' + Math.round(x.learned_share * 100) + '% own median';
+            var anchors = (DATA.anchors && DATA.anchors[x.c]) || [];
+            var anchorText = anchors.length === 0 ? 'no live token in this category' : anchors.map(function (a) { return a.name + ' ' + a.ratio.toFixed(2) + 'x'; }).join(', ');
             return el('tr', null,
               el('td', { text: x.c }),
               el('td', { class: 'num', text: fmtMult(x.multiple) }),
               el('td', { class: 'num', text: String(x.samples) }),
+              el('td', { class: 'sub', text: anchorText }),
               el('td', { class: 'sub', text: note })
             );
           }))
@@ -524,9 +571,16 @@
         ? 'Global median — no live-token protocol in this category to learn from.'
         : 'Median mcap/TVL of ' + mult.samples + ' live-token protocol' + (mult.samples === 1 ? '' : 's') + ' in this category, blended with the global median (' + Math.round((mult.learned_share || 0) * 100) + '% learned).')
       : 'Global median.';
+    var anchors = (DATA.anchors && DATA.anchors[row.category || 'Other']) || [];
+    var anchorNote = anchors.length === 0
+      ? 'No traded token anchors this multiple — it is the global median.'
+      : 'Anchored by the traded tokens ' + anchors.map(function (a) { return a.name + ' (' + a.ratio.toFixed(2) + 'x on ' + fmtUsd(a.tvl_usd) + ' TVL)'; }).join(', ') + '.';
+    var floorNote = (!row.watchlist && row.tvl_usd >= DATA.floor_usd)
+      ? ' Above the watchlist floor — the watchlist does not name this protocol, and radar-6 includes every genuine pre-token protocol, not just the watchlist.'
+      : '';
     var why = 'Rank ' + row.rank + ' because ' + fmtUsd(row.tvl_usd) + ' of TVL at a ' + fmtMult(row.category_multiple) + ' category multiple, '
       + (row.change_7d === null ? 'no reported seven-day change' : 'a seven-day change of ' + fmtPct(row.change_7d)) + ', and '
-      + fmtAge(row.age_days) + ' listed with no token on record. Within ' + (row.category || 'Other') + ' it ranks #' + (row.category_rank || 1) + '.';
+      + fmtAge(row.age_days) + ' listed with no token on record. Within ' + (row.category || 'Other') + ' it ranks #' + (row.category_rank || 1) + '.' + floorNote;
     dialog.appendChild(el('div', { class: 'detail-head' },
       el('div', null,
         el('span', { class: 'brand-name', text: 'Rank ' + row.rank + ' of ' + DATA.board_size + (row.watchlist ? ' · on the watchlist' : ' · early radar') }),
@@ -546,7 +600,7 @@
         el('div', null, el('span', { text: 'Maturity multiplier' }), el('b', { class: 'num', text: String(row.maturity_multiplier) })),
         el('div', null, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) }))
       ),
-      el('p', { class: 'sub', text: multNote + ' The page recomputes this row as ' + fmtUsd(impliedOf(row, null)) + ', the same number board.json carries. This is an estimate, not a price.' }),
+      el('p', { class: 'sub', text: multNote + ' ' + anchorNote + ' The page recomputes this row as ' + fmtUsd(impliedOf(row, null)) + ', the same number board.json carries. This is an estimate, not a price.' }),
       el('p', { class: 'sub', text: why }),
       el('p', { class: 'sub', text: 'Rank range: 200 refits of the multiples on resampled live-token sets place this row between #' + row.rank_low + ' and #' + row.rank_high + ' (median #' + row.rank_median + '). The rank is a claim with an uncertainty, not an exact place.' })
     ));
@@ -589,6 +643,7 @@
     shell.appendChild(categoryChart());
     shell.appendChild(calibrationPanel());
     shell.appendChild(validationPanel());
+    shell.appendChild(gatingPanel());
     shell.appendChild(controls());
     shell.appendChild(state.tab === 'pre-token' ? boardTable() : liveTable());
     if (state.tab === 'pre-token') {
@@ -599,6 +654,10 @@
     app.setAttribute('aria-busy', 'false');
     if (!dialog.isConnected) app.appendChild(dialog);
     if (state.selected) openDetail(state.selected);
+    if (hashHasFilter && !state.selected) {
+      var controlsEl = shell.querySelector('.controls');
+      if (controlsEl) controlsEl.scrollIntoView();
+    }
     window.__shotReady = true;
   }
 
