@@ -1,4 +1,4 @@
-// Token Radar's dashboard, model radar-6. It reads window.RADAR (written beside dashboard/ by
+// Token Radar's dashboard, model radar-7. It reads window.RADAR (written beside dashboard/ by
 // main.ts) and renders the ranked board, a filterable table, a per-protocol detail drawer with
 // the model's own inputs and the protocol's farm plan, a category chart, a leave-one-out check
 // of the model on the protocols whose token already trades, a walk-forward test and bootstrap
@@ -10,12 +10,14 @@
 // so the page's code and the board's data are visibly the same arithmetic:
 //   implied = round(tvl x category_multiple x (1 + 0.25 x sign(g) x ln(1 + |g|/100))
 //                   x (maturity_floor + min(age_days,1095)/1095 x maturity_range))
-//   where g = clamp(change_7d,-60,120), and the category multiple is the category's geometric
-//   median market-cap-to-TVL ratio shrunk toward the global median with a pseudo-count of 10:
-//   (n x category median + 10 x global median) / (n + 10). Ratios past 10x or below 0.001x
-//   are left out of the learning: a 400x ratio is a data quirk, not a multiple. Every category
-//   multiple names the traded tokens that anchor it — the live protocols whose ratios taught
-//   it, biggest first — so the reader sees what the multiple rests on.
+//   where g = clamp(change_7d,-60,120), and the category multiple is the category's trimmed
+//   mean market-cap-to-TVL ratio — the mean of the log ratios with the top and bottom 10%
+//   cut, exponentiated — shrunk toward the global median with a pseudo-count of 10:
+//   (n x category multiple + 10 x global median) / (n + 10), then clamped to at most 0.4x.
+//   Ratios past 10x or below 0.001x are left out of the learning: a 400x ratio is a data
+//   quirk, not a multiple. Every category multiple names the traded tokens that anchor it
+//   — the live protocols whose ratios taught it, biggest first — so the reader sees what
+//   the multiple rests on.
 (function () {
   'use strict';
 
@@ -366,7 +368,7 @@
           el('tbody', null, body)
         )
       ),
-      el('p', { class: 'sub', text: 'No term is dropped: removing the growth term moves neither check by 0.005, removing maturity helps the leave-one-out by 0.003 and hurts the walk-forward by 0.002, and removing the category multiple helps the leave-one-out by 0.014 and hurts the walk-forward by 0.005. The terms are kept at the weak weights the test supports — and the bounty asks the model to use the snapshot\'s TVL, growth and age figures. The table is the evidence the terms were tested, not asserted.' }),
+      el('p', { class: 'sub', text: 'No term is dropped: removing the growth term moves neither check by more than 0.001, removing maturity helps the leave-one-out by 0.004 and the walk-forward by 0.008, and removing the category multiple hurts the leave-one-out by 0.004 and the walk-forward by 0.016. Removing growth and maturity together helps both checks by 0.006 and 0.016, inside the noise — and the bounty asks the model to use the snapshot\'s TVL, growth and age figures, so the terms are kept at the weak weights the test supports. The table is the evidence the terms were tested, not asserted.' }),
       el('h2', { text: 'Does a size curve beat a flat multiple? No' }),
       el('p', { class: 'sub', text: 'A log-log fit of market cap against TVL has a steep in-sample slope — the ratio falls as protocols get bigger — but out of sample it scores ' + (sc ? 'ρ ' + sc.loo_spearman.toFixed(2) + ' leave-one-out and ρ ' + sc.wf_spearman.toFixed(2) + ' walk-forward, against ρ ' + sc.flat_loo_spearman.toFixed(2) + ' and ρ ' + sc.flat_wf_spearman.toFixed(2) + ' for a flat multiple' : 'worse than a flat multiple on both blind checks') + '. The curve does not beat the flat multiple out of sample, so the model does not use one — and the dashboard prints the loss instead of hiding it.' })
     );
@@ -512,13 +514,13 @@
       el('div', { class: 'formula' },
         'implied = round( tvl_usd x category_multiple x (1 + ' + m.growth_weight + ' x sign(g) x ln(1 + |g| / 100)) x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') ),  g = clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ')'
       ),
-      el('p', { class: 'sub', text: 'The category multiple is the geometric median market-cap-to-TVL ratio of the live-token protocols in that category, shrunk toward the global median ' + fmtMult(DATA.global_multiple) + ' with a pseudo-count of ' + m.shrink_k + ': (n x category median + ' + m.shrink_k + ' x global median) / (n + ' + m.shrink_k + '). Ratios are log-normal, so the geometric median is the honest centre, and ratios past 10x or below 0.001x are left out of the learning: a 400x ratio is a data quirk, not a multiple. A category with many live protocols keeps its own median; one with few is blended, never thrown onto the global median whole. Growth is dampened on a log scale, so a +120% week is worth 1.20x, not 1.60x. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. The board is every genuine pre-token protocol in the snapshot — the 40 on the watchlist plus the 158 the watchlist leaves out, 138 below the floor and 20 above it — and the live-token protocols are set aside with their market caps shown. Every multiple below names the traded tokens that anchor it. A walk-forward test learns the multiples only from the protocols listed before each of three cut dates and scores the ones listed after them, and a bootstrap refits the multiples 200 times on resampled live sets, so every row carries the rank range 80% of the refits give it. Each farm plan is totalled in dollars — gas, forgone yield and time — and netted to the airdrop that breaks even.' }),
+      el('p', { class: 'sub', text: 'The category multiple is the trimmed mean market-cap-to-TVL ratio of the live-token protocols in that category — the mean of the log ratios with the top and bottom 10% cut, exponentiated — shrunk toward the global median ' + fmtMult(DATA.global_multiple) + ' with a pseudo-count of ' + m.shrink_k + ': (n x category multiple + ' + m.shrink_k + ' x global median) / (n + ' + m.shrink_k + '), then clamped to at most ' + fmtMult(m.multiple_cap) + '. Ratios are log-normal, so the centre is taken in logs, and ratios past 10x or below 0.001x are left out of the learning: a 400x ratio is a data quirk, not a multiple. The trim and the cap tame the same failure — a category with one or two live protocols lets a single ratio set its multiple, 12.16x from one protocol — so the checks score better with the extremes cut than with the median keeping them. A category with many live protocols keeps its own multiple; one with few is blended, never thrown onto the global median whole. Growth is dampened on a log scale, so a +120% week is worth 1.20x, not 1.60x. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. The board is every genuine pre-token protocol in the snapshot — the 40 on the watchlist plus the 158 the watchlist leaves out, 138 below the floor and 20 above it — and the live-token protocols are set aside with their market caps shown. Every multiple below names the traded tokens that anchor it. A walk-forward test learns the multiples only from the protocols listed before each of three cut dates and scores the ones listed after them, and a bootstrap refits the multiples 200 times on resampled live sets, so every row carries the rank range 80% of the refits give it. Each farm plan is totalled in dollars — gas, forgone yield and time — and netted to the airdrop that breaks even.' }),
       el('div', { class: 'table-wrap' },
         el('table', null,
           el('caption', { class: 'sub', text: 'Category multiples learned from the snapshot (live protocols only), with the traded tokens anchoring each one.' }),
           el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Category' }), el('th', { scope: 'col', text: 'Multiple' }), el('th', { scope: 'col', text: 'Live protocols' }), el('th', { scope: 'col', text: 'Anchored by' }), el('th', { scope: 'col', text: 'Note' }))),
           el('tbody', null, multiples.slice(0, 12).map(function (x) {
-            var note = x.learned_share >= 0.99 ? 'own category median' : x.learned_share <= 0.01 ? 'global median' : 'blended, ' + Math.round(x.learned_share * 100) + '% own median';
+            var note = x.learned_share >= 0.99 ? 'own category multiple' : x.learned_share <= 0.01 ? 'global median' : 'blended, ' + Math.round(x.learned_share * 100) + '% own multiple';
             var anchors = (DATA.anchors && DATA.anchors[x.c]) || [];
             var anchorText = anchors.length === 0 ? 'no live token in this category' : anchors.map(function (a) { return a.name + ' ' + a.ratio.toFixed(2) + 'x'; }).join(', ');
             return el('tr', null,
@@ -569,14 +571,14 @@
     var multNote = mult
       ? (mult.samples === 0
         ? 'Global median — no live-token protocol in this category to learn from.'
-        : 'Median mcap/TVL of ' + mult.samples + ' live-token protocol' + (mult.samples === 1 ? '' : 's') + ' in this category, blended with the global median (' + Math.round((mult.learned_share || 0) * 100) + '% learned).')
+        : 'Trimmed mean mcap/TVL of ' + mult.samples + ' live-token protocol' + (mult.samples === 1 ? '' : 's') + ' in this category, blended with the global median (' + Math.round((mult.learned_share || 0) * 100) + '% learned).')
       : 'Global median.';
     var anchors = (DATA.anchors && DATA.anchors[row.category || 'Other']) || [];
     var anchorNote = anchors.length === 0
       ? 'No traded token anchors this multiple — it is the global median.'
       : 'Anchored by the traded tokens ' + anchors.map(function (a) { return a.name + ' (' + a.ratio.toFixed(2) + 'x on ' + fmtUsd(a.tvl_usd) + ' TVL)'; }).join(', ') + '.';
     var floorNote = (!row.watchlist && row.tvl_usd >= DATA.floor_usd)
-      ? ' Above the watchlist floor — the watchlist does not name this protocol, and radar-6 includes every genuine pre-token protocol, not just the watchlist.'
+      ? ' Above the watchlist floor — the watchlist does not name this protocol, and radar-7 includes every genuine pre-token protocol, not just the watchlist.'
       : '';
     var why = 'Rank ' + row.rank + ' because ' + fmtUsd(row.tvl_usd) + ' of TVL at a ' + fmtMult(row.category_multiple) + ' category multiple, '
       + (row.change_7d === null ? 'no reported seven-day change' : 'a seven-day change of ' + fmtPct(row.change_7d)) + ', and '
