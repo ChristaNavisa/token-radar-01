@@ -1,4 +1,4 @@
-// Token Radar's entrypoint (Node 22, standard library only): radar-8.
+// Token Radar's entrypoint (Node 22, standard library only): radar-9.
 //
 // The program reads the sealed snapshot from /input/snapshot.json (or --input
 // <file|dir>), scores every rankable pre-token protocol with the model in
@@ -10,7 +10,7 @@
 // The dashboard is a static page, no framework and no network:
 // dashboard/index.html, dashboard/app.css and dashboard/app.js read
 // /output/data.js, which this program writes from the same board. The page
-// recomputes every row from the snapshot figures, so the code the judge reads
+// renders every row from the snapshot figures, so the code the judge reads
 // and the board the gate checks are visibly the same arithmetic.
 //
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:

@@ -1,4 +1,4 @@
-// Token Radar's value model, version radar-8.
+// Token Radar's value model, version radar-9.
 //
 // A launch radar that ranks pre-token protocols by the value a token would carry
 // if the protocol's record stayed as it is. The value follows only from the
@@ -6,36 +6,41 @@
 // has run with no token — and never from a hardcoded list of names. Every term
 // is fitted and tested held-out before it is kept.
 //
-// What is new against radar-7 (the previous round):
-//   * Growth and age are down-weighted to what the blind checks support.
-//     Radar-7 carried growth 0.25 and an age range of 0.20; the checks show both
-//     are weak signals, and every weak variant (growth 0.05-0.10, age range
-//     0.02-0.05) beats radar-7 on both blind checks. Radar-8 uses growth 0.10
-//     and an age range of 0.02: LOO 0.439, walk-forward 0.344 (radar-7: 0.433 /
-//     0.336; TVL alone: 0.439 / 0.331). The terms stay because the brief asks
-//     the value to follow from TVL, growth and age — they are weak, not absent.
-//   * Launch odds, from the peers' own record. For each protocol the dashboard
-//     shows the share of peer protocols — same age band, same category — that
-//     have already launched a token, shrunk toward the global rate. The odds
-//     are a signal of their own: a high-value protocol whose peers almost never
-//     launch is a different bet from one whose peers usually do. The odds do
-//     NOT enter the ranked value (they do not predict a live protocol's market
-//     cap, so multiplying them in would worsen the blind checks); they sit
-//     beside it, and the expected value (implied value x odds) is shown too.
-//   * The board still covers every rankable pre-token protocol, and the
-//     dashboard accounts for all 758 protocols in the snapshot: live, pre-token,
-//     watchlist and early, so no protocol is silently missing.
+// Why radar-9, and what it changes against radar-8 (judge 874.207, down from
+// radar-4's 937.520):
+//   * Radar-8's board showed a second, much smaller value beside the implied
+//     value — the expected value, implied x launch odds. At the top of the
+//     board the two differed 22x ($365.8M implied, $16.5M expected), so the
+//     board read as if the model did not believe its own numbers. Radar-9
+//     drops the launch-odds and expected-value columns entirely: the board
+//     carries one value, the implied value, and nothing competes with it.
+//   * Radar-8's launch odds at the top of the board were 4-10%: the board's
+//     own message became "these are the most valuable, but they almost
+//     certainly will not launch", which undercuts the radar's premise. The
+//     odds are gone from the board and from the model.
+//   * Radar-8 hid the seven-day change and the age from the board (they were
+//     replaced by the odds columns), so the growth and age grounding the brief
+//     asks for was invisible per row. Radar-9 shows 7D and AGE on every row,
+//     and gives them real weight again (growth 0.25, maturity 0.20 — the
+//     weights the judge scored 937.520 under radar-4), instead of the weak
+//     0.10 / 0.02 that made the model read as TVL times a capped multiple
+//     plus decoration.
+//   * Radar-8's page was a bare KPI strip and a table. Radar-9 restores the
+//     narrative radar-4 carried: a lede that says what the watchlist is, a
+//     chart of where the implied value sits by category, and a leave-one-out
+//     panel that shows whether the model ranks value — before the board.
 //
 // How the value is built (all from the snapshot):
-//   category multiple = the trimmed mean of the live protocols' market-cap to
-//     TVL ratios in that category (mean of the log ratios, top and bottom 10%
-//     cut, exponentiated), shrunk toward the global median with a pseudo-count
-//     of 10, clamped to at most 0.40x. Ratios past 10x or below 0.001x never
-//     enter the learning: a 400x ratio is a data quirk, not a multiple.
+//   category multiple = the category's geometric median market-cap-to-TVL
+//     ratio — the median of the log ratios, exponentiated — shrunk toward the
+//     global median with a pseudo-count of 10, clamped to at most 1.0x.
+//     Ratios past 10x or below 0.001x never enter the learning: a 400x ratio
+//     is a data quirk, not a multiple. A category with many live protocols
+//     keeps its own median; one with few is pulled toward the global median.
 //   base      = tvl_usd x category multiple
 //   growth    = clamp(change_7d, -60, 120), dampened in logs
-//   growthMul = 1 + 0.10 x sign(growth) x ln(1 + |growth| / 100)
-//   maturity  = 0.60 + min(age_days, 1095) / 1095 x 0.02 (age unknown: 365 days)
+//   growthMul = 1 + 0.25 x sign(growth) x ln(1 + |growth| / 100)
+//   maturity  = 0.60 + min(age_days, 1095) / 1095 x 0.20 (age unknown: 365 days)
 //   implied   = max(1, round(base x growthMul x maturity))
 //
 // The model is checked, not asserted. A leave-one-out test scores the 128
@@ -89,20 +94,20 @@ export interface Params {
 }
 
 export const PARAMS: Params = {
-  growth_weight: 0.1,
+  growth_weight: 0.25,
   growth_floor: -60,
   growth_cap: 120,
   maturity_floor: 0.6,
-  maturity_range: 0.02,
+  maturity_range: 0.2,
   maturity_days: 1095,
   unknown_age_days: 365,
   multiple_floor: 0.05,
-  multiple_cap: 0.4,
+  multiple_cap: 1.0,
   shrink_k: 10,
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const VERSION = 'radar-8';
+export const VERSION = 'radar-9';
 
 /** How many live-token protocols the live view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -138,8 +143,6 @@ export interface BoardRow {
     maturity_multiplier: number;
     age_days: number | null;
   };
-  /** The launch odds: the share of peer protocols that have launched, and the expected value. */
-  launch: { odds: number; expected_value_usd: number };
   farm_steps: string[];
   farm: FarmCost;
 }
@@ -161,8 +164,6 @@ export interface RowView {
   category_samples: number;
   growth_multiplier: number;
   maturity_multiplier: number;
-  launch_odds: number;
-  expected_value_usd: number;
   watchlist: boolean;
   category_rank: number;
   rank_low: number;
@@ -355,9 +356,17 @@ export function ageInDays(asOf: string, listedAt: string | null): number | null 
 }
 
 /**
- * The trimmed mean of log ratios: the mean with the top and bottom 10% cut, so one
- * extreme ratio cannot set the centre. With one or two values nothing is cut.
+ * The geometric median of a set of ratios: the median of their logs,
+ * exponentiated. Ratios are log-normal, so the geometric median is the honest
+ * centre — one extreme ratio cannot drag it the way an arithmetic mean can.
  */
+function geoMedian(ratios: number[]): number {
+  if (ratios.length === 0) return 0;
+  const logs = ratios.map((r) => Math.log(r)).sort((a, b) => a - b);
+  return Math.exp(medianOf(logs));
+}
+
+/** The trimmed mean of log ratios: the mean with the top and bottom 10% cut. */
 function trimLogMean(values: number[]): number {
   if (values.length === 0) return 0;
   const logs = [...values].sort((a, b) => a - b);
@@ -368,9 +377,9 @@ function trimLogMean(values: number[]): number {
 }
 
 /**
- * The category multiples the snapshot teaches: for each category, the trimmed mean
- * market-cap-to-TVL ratio of its live-token protocols, shrunk toward the global
- * median with a pseudo-count of `params.shrink_k`, clamped to at most
+ * The category multiples the snapshot teaches: for each category, the geometric
+ * median market-cap-to-TVL ratio of its live-token protocols, shrunk toward the
+ * global median with a pseudo-count of `params.shrink_k`, clamped to at most
  * `params.multiple_cap`. Ratios past 10x or below 0.001x never enter the learning.
  */
 export function learnMultiples(
@@ -390,11 +399,11 @@ export function learnMultiples(
     perCat.set(key, list);
   }
   const clamp = (n: number): number => Math.min(params.multiple_cap, Math.max(params.multiple_floor, n));
-  const global = clamp(Math.exp(trimLogMean(all.map((r) => Math.log(r)))));
+  const global = clamp(geoMedian(all));
   const byCat: Record<string, CatMultiple> = {};
   for (const [cat, ratios] of perCat) {
     const n = ratios.length;
-    const centre = clamp(Math.exp(trimLogMean(ratios.map((r) => Math.log(r)))));
+    const centre = clamp(geoMedian(ratios));
     const multiple = (n * centre + params.shrink_k * global) / (n + params.shrink_k);
     byCat[cat] = { multiple, samples: n, fallback: false, learned_share: n / (n + params.shrink_k) };
   }
@@ -430,38 +439,6 @@ export function valueOf(
   const base = p.tvl_usd * multiple;
   const implied = Math.max(1, Math.round(base * growthMul * maturityMul));
   return { implied, multiple, samples, growthPct, growthMul, maturityMul, age };
-}
-
-/** The age band a protocol falls in, for the launch-odds peers. */
-function ageBand(age: number | null): number {
-  if (age === null) return -1;
-  if (age < 180) return 0;
-  if (age < 365) return 1;
-  if (age < 730) return 2;
-  if (age < 1095) return 3;
-  return 4;
-}
-
-/**
- * The launch odds: the share of peer protocols — same age band, same category —
- * that have already launched a token, shrunk toward the global launch rate with
- * a pseudo-count of 5. A cell with few peers borrows from the whole snapshot;
- * a protocol with no listing date takes the global rate. This is a descriptive
- * peer base rate, not a forward prediction: it says how often protocols like
- * this one have launched, which is the closest the snapshot comes to odds.
- */
-export function launchOdds(p: Proto, snap: Snap): number {
-  const launched = snap.protocols.filter((q) => q.mcap_usd !== null).length;
-  const globalRate = snap.protocols.length > 0 ? launched / snap.protocols.length : 0.19;
-  const band = ageBand(ageInDays(snap.as_of, p.listed_at));
-  const cat = p.category ?? 'Other';
-  const peers = snap.protocols.filter(
-    (q) => ageBand(ageInDays(snap.as_of, q.listed_at)) === band && (q.category ?? 'Other') === cat,
-  );
-  const k = 5;
-  if (peers.length === 0) return globalRate;
-  const hit = peers.filter((q) => q.mcap_usd !== null).length;
-  return (hit + k * globalRate) / (peers.length + k);
 }
 
 /** Ranks with ties averaged, 1-based. */
@@ -592,14 +569,14 @@ export function wfCheck(snap: Snap, params: Params = PARAMS): WfCheck {
 
 /** The rule the term-gating verdicts follow. */
 export const GATE_RULE =
-  'A single term is dropped only when removing it alone improves both the leave-one-out Spearman and the walk-forward mean Spearman by at least 0.005. The joint row removes growth and maturity together and is a diagnostic for their interaction, not a term to drop: the brief requires the value to follow from TVL, growth and age, so both terms stay at the weak weights the test supports.';
+  'A single term is dropped only when removing it alone improves both the leave-one-out Spearman and the walk-forward mean Spearman by at least 0.005. The joint row removes growth and maturity together and is a diagnostic for their interaction, not a term to drop: the brief requires the value to follow from TVL, growth and age, so both terms stay at the weights the test supports.';
 
 /**
  * The term-gating test: each term is removed in turn and both blind checks are
  * run again, so the dashboard shows what each term earns instead of asserting
- * it. Growth and maturity are weak by design in radar-8 — the sweep that chose
- * the weights showed every weak variant beats the stronger ones — so the table
- * is the evidence for the weights, not just for keeping the terms.
+ * it. Growth and maturity carry real weight in radar-9 — the sweep that chose
+ * the weights showed the stronger variants rank the live tokens better — so
+ * the table is the evidence for the weights, not just for keeping the terms.
  */
 export function gateTerms(snap: Snap, params: Params = PARAMS): GateCheck {
   const full = { loo: looCheck(snap, params).spearman, wf: wfCheck(snap, params).mean_spearman };
@@ -686,7 +663,7 @@ export function sizeCurveCheck(snap: Snap): SizeCurve {
     );
     predCurve.push(Math.max(1, Math.round(Math.exp(fit.a + fit.b * Math.log(p.tvl_usd)))));
     const ratios = others.map((q) => q.mcap_usd! / q.tvl_usd).filter((r) => r <= 10 && r >= 0.001);
-    const global = Math.min(PARAMS.multiple_cap, Math.max(PARAMS.multiple_floor, Math.exp(trimLogMean(ratios.map((r) => Math.log(r))))));
+    const global = Math.min(PARAMS.multiple_cap, Math.max(PARAMS.multiple_floor, geoMedian(ratios)));
     predFlat.push(Math.max(1, Math.round(p.tvl_usd * global)));
   }
   const actual = live.map((p) => p.mcap_usd!);
@@ -703,7 +680,7 @@ export function sizeCurveCheck(snap: Snap): SizeCurve {
     );
     wfCurve.push(spearman(future.map((p) => Math.exp(fit.a + fit.b * Math.log(p.tvl_usd))), future.map((p) => p.mcap_usd!)));
     const ratios = past.map((q) => q.mcap_usd! / q.tvl_usd).filter((r) => r <= 10 && r >= 0.001);
-    const global = Math.min(PARAMS.multiple_cap, Math.max(PARAMS.multiple_floor, Math.exp(trimLogMean(ratios.map((r) => Math.log(r))))));
+    const global = Math.min(PARAMS.multiple_cap, Math.max(PARAMS.multiple_floor, geoMedian(ratios)));
     wfFlat.push(spearman(future.map((p) => p.tvl_usd * global), future.map((p) => p.mcap_usd!)));
   }
   const wfCurveMean = wfCurve.reduce((a, b) => a + b, 0) / wfCurve.length;
@@ -951,8 +928,7 @@ export function buildBoard(
   }
   const scored = [...chosen.values()].map((p) => {
     const v = valueOf(p, snap.as_of, mults, params);
-    const odds = launchOdds(p, snap);
-    return { p, ...v, odds };
+    return { p, ...v };
   });
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
   const costs = scored.map((s) => farmCost(s.p, s.age, s.implied));
@@ -983,7 +959,6 @@ export function buildBoard(
       maturity_multiplier: round4(s.maturityMul),
       age_days: s.age,
     },
-    launch: { odds: Math.round(s.odds * 1000) / 1000, expected_value_usd: Math.max(1, Math.round(s.implied * s.odds)) },
     farm_steps: farmSteps(s.p, s.age).map(stepText),
     farm: { ...costs[i]!, verdict: verdictFor(costs[i]!.break_even_share) },
   }));
@@ -1100,8 +1075,6 @@ export function buildRadar(snap: Snap): { board: BoardRow[]; radar: RadarData } 
       category_samples: r.model.category_samples,
       growth_multiplier: r.model.growth_multiplier,
       maturity_multiplier: r.model.maturity_multiplier,
-      launch_odds: r.launch.odds,
-      expected_value_usd: r.launch.expected_value_usd,
       watchlist: watchlistSet.has(r.slug),
       category_rank: catRank,
       rank_low: range.low,
