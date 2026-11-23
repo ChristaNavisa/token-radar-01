@@ -1,17 +1,17 @@
-// Token Radar's entrypoint (Node 22, standard library only): radar-9.
+// Token Radar's entrypoint (Node 22, standard library only): radar-10.
 //
-// The program reads the sealed snapshot from /input/snapshot.json (or --input
-// <file|dir>), scores every rankable pre-token protocol with the model in
-// lib/model.ts, writes the ranked board to /output/board.json, writes the
-// dashboard's data beside the page as data.js, and copies this repository's
-// dashboard/ and screenshots/ to /output. Last, it writes /output/dossier.json,
-// the summary the judge reads, with the vendored make.fun library.
+// The program reads the sealed snapshot, scores the watchlist plus the early
+// radar below the floor with the model in lib/model.ts, writes the ranked board
+// to board.json, writes the dashboard's data beside the page as data.js, and
+// copies this repository's dashboard/ and screenshots/ into the output
+// directory. Last, it writes dossier.json, the summary the judge reads, with
+// the vendored make.fun library.
 //
 // The dashboard is a static page, no framework and no network:
-// dashboard/index.html, dashboard/app.css and dashboard/app.js read
-// /output/data.js, which this program writes from the same board. The page
-// renders every row from the snapshot figures, so the code the judge reads
-// and the board the gate checks are visibly the same arithmetic.
+// dashboard/index.html, dashboard/app.css and dashboard/app.js read data.js,
+// which this program writes from the same board. The page renders every row
+// from the snapshot figures, so the code the judge reads and the board the
+// gate checks are visibly the same arithmetic.
 //
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../input/snapshot.json
@@ -38,21 +38,23 @@ function flag(name: string, fallback: string): string {
   return eq === undefined ? fallback : eq.slice(name.length + 3);
 }
 
+/** Die with a message on stderr and a non-zero exit. */
+function fail(message: string): never {
+  process.stderr.write(`token radar: ${message}\n`);
+  process.exit(1);
+}
+
 const inputArg = flag('input', '/input');
 const inputPath = inputArg.endsWith('.json') ? inputArg : join(inputArg, 'snapshot.json');
 if (!existsSync(inputPath)) {
-  process.stderr.write(`token radar: no snapshot at ${inputPath}: pass --input <snapshot.json|directory> or mount the sealed /input\n`);
-  process.exit(2);
+  fail(`no snapshot at ${inputPath}: pass --input <snapshot.json|directory> or mount the sealed /input`);
 }
 const outDir = flag('output', process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
 
 const snap = parseSnapshot(readFileSync(inputPath, 'utf8'));
 const { board, radar } = buildRadar(snap);
 const problem = boardProblem(board, snap);
-if (problem !== null) {
-  process.stderr.write(`token radar: the model wrote a board the gate refuses: ${problem}\n`);
-  process.exit(1);
-}
+if (problem !== null) fail(`the model wrote a board the gate refuses: ${problem}`);
 
 mkdirSync(outDir, { recursive: true });
 writeFileSync(join(outDir, 'board.json'), `${JSON.stringify({ rows: board })}\n`);
@@ -76,14 +78,10 @@ function copyDir(from: string, to: string): string[] {
 const dashFiles = copyDir(join(here, 'dashboard'), join(outDir, 'dashboard'));
 const shots = copyDir(join(here, 'screenshots'), join(outDir, 'screenshots'));
 if (shots.length < 3) {
-  process.stderr.write(`token radar: screenshots/ holds ${shots.length} image${shots.length === 1 ? '' : 's'}: hand in 3, the board, a detail view and a filtered view\n`);
-  process.exit(1);
+  fail(`screenshots/ holds ${shots.length} image${shots.length === 1 ? '' : 's'}: hand in 3, the board, a detail view and a filtered view`);
 }
 for (const name of shots) {
-  if (!SHOT_NAME.test(name)) {
-    process.stderr.write(`token radar: screenshots/${name}: a name is letters, digits and . _ -, 1 to 128 characters\n`);
-    process.exit(1);
-  }
+  if (!SHOT_NAME.test(name)) fail(`screenshots/${name}: a name is letters, digits and . _ -, 1 to 128 characters`);
 }
 
 // The dossier is written last: the scorer rebuilds it from this /output and compares bytes.

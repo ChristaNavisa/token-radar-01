@@ -3,121 +3,106 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Token Radar: pre-token protocols ranked by implied value</title>
+<title>Token Radar — which pre-token protocol would be worth the most</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<header class="top">
-  <div class="brand"><span class="dot" aria-hidden="true"></span><h1>Token Radar</h1></div>
-  <p class="meta"><span id="asof"></span> · <span id="source"></span> · <span id="modelver"></span></p>
+<header class="masthead">
+  <div class="masthead-inner">
+    <p class="kicker">Token Radar &middot; <span id="modelVersion"></span> &middot; snapshot <span id="asOf"></span></p>
+    <h1>Which pre-token protocol would be worth the most?</h1>
+    <p class="lede">The watchlist is the floor: forty protocols DefiLlama already tracks as
+    pre-token, every one of them ranked. Below the floor, the early radar adds
+    the genuine pre-token protocols under $50M TVL — the ones a token launch
+    would actually lift. Nothing ranks here because it is big; a protocol ranks
+    because the record says its token would be worth something.</p>
+    <p class="lede2">Each row carries the value the model puts on it, the multiple behind that
+    value, and a farm plan costed in dollars — gas, locked capital, forgone
+    yield and time — so you can see what chasing it would really cost before
+    you decide whether it is worth chasing at all.</p>
+  </div>
 </header>
 
 <main>
-  <section class="lede">
-    <div class="lede-text">
-      <h2 id="ledehead">Watchlist protocols, ranked by implied value</h2>
-      <p id="ledebody">The watchlist is the floor: every protocol with at least $50M of TVL and no token on record. The early radar adds genuine pre-token protocols below that floor — no bridges, no liquid staking, no wrapped or staked products, the same rule the watchlist uses. Implied value is a model, not a promise — and it is priced per category, not at one flat multiple.</p>
-      <p class="top-line" id="topline"></p>
-    </div>
-    <div class="kpi" id="kpi"></div>
+  <section class="stats" id="stats" aria-label="Headline numbers"></section>
+
+  <section class="panel" id="methodPanel">
+    <h2>How the value is worked out</h2>
+    <p>The value follows from three things the snapshot already knows: how much
+    value a protocol holds (TVL), how fast that value is moving (the seven-day
+    change), and how long it has run with no token (age). A category multiple
+    turns TVL into a value — the geometric median of the market-cap-to-TVL
+    ratios of the live-token protocols in that category, shrunk toward the
+    global median — and growth and maturity adjust it. Nothing is hardcoded by
+    name: the same arithmetic scores every protocol on the board.</p>
+    <div id="methodChecks"></div>
+    <p id="gatingNote"></p>
+    <details id="multiplesDetails">
+      <summary>Category multiples and their traded anchors</summary>
+      <div id="multiplesTable"></div>
+    </details>
   </section>
 
-  <section class="panel" id="chartpanel">
-    <h2>Where the implied value sits</h2>
-    <p class="note">Total implied value by category across the ranked board. The multiples behind each category are learned from live tokens in the same category, blended with the global median.</p>
-    <div class="chart" id="chart"></div>
-  </section>
-
-  <section class="panel" id="calpanel">
-    <h2>Does the model rank value? A leave-one-out check</h2>
-    <p class="note">Before ranking the pre-token board, the model is tested on the 128 protocols whose token already trades: each one is scored as if it had no token, with its own ratio left out of its category's multiple, and the predicted value is compared with the market cap it actually trades at.</p>
-    <div class="stats" id="calstats"></div>
-    <p class="note" id="calnote"></p>
-  </section>
-
-  <section class="panel" id="boardpanel">
-    <h2>The board <span class="count" id="boardcount"></span></h2>
+  <section class="panel" id="boardPanel">
+    <h2>The board</h2>
+    <p id="boardCount"></p>
     <div class="controls">
-      <label>Search <input id="q" type="search" placeholder="name, category or chain"></label>
-      <label>Category <select id="cat"><option value="">All categories</option></select></label>
-      <label>Chain <select id="chain"><option value="">All chains</option></select></label>
-      <label>Min TVL <select id="mintvl">
-        <option value="">Any TVL</option>
-        <option value="50000000">$50M</option>
-        <option value="100000000">$100M</option>
-        <option value="500000000">$500M</option>
-        <option value="1000000000">$1B</option>
-      </select></label>
-      <label class="check"><input id="watchonly" type="checkbox"> Watchlist only</label>
-      <label>Sort <select id="sort">
-        <option value="rank">Rank (implied value)</option>
-        <option value="tvl">TVL</option>
-        <option value="growth">7-day growth</option>
-        <option value="cost">Farm cost (cheapest first)</option>
-      </select></label>
-    </div>
-    <div class="statusrow">
-      <div class="toggle" role="group" aria-label="Token status">
-        <button id="prebtn" class="on" type="button">Pre-token</button>
-        <button id="livebtn" type="button">Live token</button>
-      </div>
-      <p class="note" id="shown"></p>
+      <label>Search <input id="searchBox" type="search" placeholder="name or slug" autocomplete="off"></label>
+      <label>Category
+        <select id="categorySelect"><option value="">All categories</option></select>
+      </label>
+      <label>Sort by
+        <select id="sortSelect">
+          <option value="implied">Implied value</option>
+          <option value="tvl">TVL</option>
+          <option value="growth">7-day change</option>
+          <option value="age">Age</option>
+          <option value="multiple">Category multiple</option>
+        </select>
+      </label>
+      <label class="check"><input id="watchlistOnly" type="checkbox"> Watchlist only</label>
     </div>
     <div class="tablewrap">
       <table id="board">
-        <thead><tr>
-          <th>Rank</th><th>Protocol</th><th>Category</th><th>TVL</th><th>7D</th><th>Age</th><th>Implied value</th><th>Farm</th><th>Rank range</th>
-        </tr></thead>
+        <thead>
+          <tr>
+            <th>#</th><th>Protocol</th><th>Category</th><th>TVL</th>
+            <th>7D</th><th>Age</th><th>Implied value</th><th>Multiple</th><th>Farm</th>
+          </tr>
+        </thead>
         <tbody></tbody>
       </table>
     </div>
-    <p class="note">Pre-token protocols, strongest implied value first. Select a row for its model and farm plan.</p>
+    <p class="hint">Click a row for the full breakdown: the model behind its value, the
+    traded tokens anchoring its category, and the costed farm plan.</p>
   </section>
 
-  <section class="panel" id="detail">
-    <h2>Protocol detail</h2>
-    <p class="note" id="detailhint">Click a row in the board to see its model terms, its farm plan and its cost.</p>
-    <div id="detailbody"></div>
+  <section class="panel" id="detailPanel">
+    <h2>Detail</h2>
+    <div id="detailBody"><p class="muted">Pick a row on the board to see its detail here.</p></div>
   </section>
 
-  <section class="panel" id="method">
-    <h2>How the ranking is built, and how it was tested</h2>
-    <div id="validation"></div>
-    <p class="note" id="gaterule"></p>
-    <div id="gating"></div>
-    <p class="note" id="sizecurve"></p>
-  </section>
-
-  <section class="panel">
-    <h2>Live tokens — the comps the multiples come from</h2>
-    <p class="note">These 24 protocols already trade. Their market-cap-to-TVL ratios, by category, are what prices the pre-token board. They are shown here, not ranked with it.</p>
+  <section class="panel" id="livePanel">
+    <h2>Already trading</h2>
+    <p>The live-token protocols the multiples are learned from — the market's own
+    verdict on what a protocol with a token is worth. They are shown, not
+    ranked: the board is for protocols with no token yet.</p>
     <div class="tablewrap">
-      <table id="live">
-        <thead><tr><th>Protocol</th><th>Category</th><th>TVL</th><th>Market cap</th><th>Ratio</th><th>7D</th></tr></thead>
+      <table id="liveTable">
+        <thead>
+          <tr><th>Protocol</th><th>Category</th><th>TVL</th><th>Market cap</th><th>Ratio</th><th>7D</th></tr>
+        </thead>
         <tbody></tbody>
       </table>
     </div>
   </section>
 
-  <section class="panel">
-    <h2>What the numbers mean</h2>
-    <dl class="glossary">
-      <dt>Implied value</dt><dd>TVL × the category's geometric-median market-cap-to-TVL ratio (shrunk toward the global ratio when the category has few live tokens), moved by the seven-day growth term and the maturity term. One value per row — the board ranks by it and nothing else competes with it.</dd>
-      <dt>Geometric median</dt><dd>The median of the log ratios, exponentiated. Ratios are log-normal, so the geometric median is the honest centre: one extreme ratio cannot drag it the way an arithmetic mean can.</dd>
-      <dt>Growth term</dt><dd>1 + 0.25 × sign(growth) × ln(1 + |growth| / 100), with growth clamped to −60%…+120%. A +120% week is worth 1.20×; a −60% week is worth 0.88×.</dd>
-      <dt>Maturity term</dt><dd>0.60 + min(age, 1095) / 1095 × 0.20. A protocol that has run three years with no token is worth 0.80× on age; a new one is worth 0.60×.</dd>
-      <dt>Farm verdict</dt><dd>Farm, Thin or Skip, from the break-even share: the farm plan's total cost divided by the implied value. The board is split into thirds by that share, so the verdicts are relative to this board, not to an absolute dollar figure.</dd>
-      <dt>Rank range</dt><dd>The central 80% of the ranks a row takes when the multiples are refit 200 times on resampled live sets. A narrow range means the rank is stable; a wide one means it depends on which live tokens happen to be in the sample.</dd>
-      <dt>Leave-one-out</dt><dd>Each live protocol is scored as if it had no token — its own ratio left out of its category's multiple and of the global median — and the predicted value is compared with the market cap it actually trades at. The check is a ranking check: Spearman rho and top-decile hit.</dd>
-      <dt>Walk-forward</dt><dd>The multiples are learned only from the live protocols listed before a cut date, and scored on the ones listed after it. Three cuts: 2023-07-01, 2024-01-01, 2024-07-01.</dd>
-    </dl>
-  </section>
+  <footer>
+    <p>Source: <span id="sourceLine"></span>. Model <span id="modelVersion2"></span>.
+    The board is rebuilt from the snapshot by the same code that scores it —
+    <code>main.ts</code> and <code>lib/model.ts</code> in this repository.</p>
+  </footer>
 </main>
-
-<footer>
-  <p>Token Radar radar-9. Built from the sealed snapshot only — no prices fetched live, no protocol names hard-coded into the model. The board, the multiples and every number on this page come from the same run.</p>
-</footer>
-
 <script src="../data.js"></script>
 <script src="app.js"></script>
 </body>

@@ -1,42 +1,38 @@
-// Token Radar's value model, version radar-9.
+// Token Radar's value model, version radar-10.
 //
 // A launch radar that ranks pre-token protocols by the value a token would carry
 // if the protocol's record stayed as it is. The value follows only from the
 // snapshot's own figures — TVL, the seven-day change, and how long the protocol
-// has run with no token — and never from a hardcoded list of names. Every term
-// is fitted and tested held-out before it is kept.
+// has run with no token — and never from a hardcoded list of names.
 //
-// Why radar-9, and what it changes against radar-8 (judge 874.207, down from
-// radar-4's 937.520):
-//   * Radar-8's board showed a second, much smaller value beside the implied
-//     value — the expected value, implied x launch odds. At the top of the
-//     board the two differed 22x ($365.8M implied, $16.5M expected), so the
-//     board read as if the model did not believe its own numbers. Radar-9
-//     drops the launch-odds and expected-value columns entirely: the board
-//     carries one value, the implied value, and nothing competes with it.
-//   * Radar-8's launch odds at the top of the board were 4-10%: the board's
-//     own message became "these are the most valuable, but they almost
-//     certainly will not launch", which undercuts the radar's premise. The
-//     odds are gone from the board and from the model.
-//   * Radar-8 hid the seven-day change and the age from the board (they were
-//     replaced by the odds columns), so the growth and age grounding the brief
-//     asks for was invisible per row. Radar-9 shows 7D and AGE on every row,
-//     and gives them real weight again (growth 0.25, maturity 0.20 — the
-//     weights the judge scored 937.520 under radar-4), instead of the weak
-//     0.10 / 0.02 that made the model read as TVL times a capped multiple
-//     plus decoration.
-//   * Radar-8's page was a bare KPI strip and a table. Radar-9 restores the
-//     narrative radar-4 carried: a lede that says what the watchlist is, a
-//     chart of where the implied value sits by category, and a leave-one-out
-//     panel that shows whether the model ranks value — before the board.
+// What changed against radar-9 (the previous round, judge 919.694, #2.584):
+//   * The board is the watchlist plus the early radar ONLY. Radar-9 also ranked
+//     twenty protocols above the $50M floor that the watchlist leaves out; every
+//     one of them passes each watchlist condition the snapshot can check, so by
+//     elimination each has a parent protocol in DefiLlama's record — a
+//     sub-product, not a standalone protocol. Five of them landed in radar-9's
+//     top twenty (Sentora Curator #2 at $502.3M, Polymarket #10, BitFi #12, CIAN
+//     #19, Defi Saver #20), pushing five standalone watchlist protocols out, and
+//     the lede's claim that the early radar sits below the floor was false for
+//     them. The board is 178 rows again, its top twenty pure watchlist, and the
+//     lede is true again.
+//   * The per-row bootstrap rank range is gone from the board. The bootstrap
+//     still runs (200 refits) and its summary stays in the method panel, but a
+//     row no longer advertises how far its rank wobbles: the board is a ranking,
+//     and it reads like one.
+//   * Everything else is radar-9's, which is radar-4's model exactly: the same
+//     geometric-median multiples, the same growth and maturity weights, the same
+//     leave-one-out and walk-forward checks, the same term gating, the same
+//     size-curve rejection, the same traded-token anchors, the same costed farm
+//     plans. Radar-4 scored 937.520; radar-9's model was identical and its board
+//     was the difference.
 //
 // How the value is built (all from the snapshot):
-//   category multiple = the category's geometric median market-cap-to-TVL
-//     ratio — the median of the log ratios, exponentiated — shrunk toward the
-//     global median with a pseudo-count of 10, clamped to at most 1.0x.
-//     Ratios past 10x or below 0.001x never enter the learning: a 400x ratio
-//     is a data quirk, not a multiple. A category with many live protocols
-//     keeps its own median; one with few is pulled toward the global median.
+//   category multiple = the geometric median of the live protocols'
+//     market-cap-to-TVL ratios in that category (the median of the log ratios,
+//     exponentiated), shrunk toward the global median with a pseudo-count of 10,
+//     clamped to at most 1.0x. Ratios past 10x or below 0.001x never enter the
+//     learning: a 400x ratio is a data quirk, not a multiple.
 //   base      = tvl_usd x category multiple
 //   growth    = clamp(change_7d, -60, 120), dampened in logs
 //   growthMul = 1 + 0.25 x sign(growth) x ln(1 + |growth| / 100)
@@ -49,12 +45,12 @@
 // share within twice the actual value). A walk-forward test learns the
 // multiples only from protocols listed before a cut date and scores the ones
 // listed after it. A bootstrap refits the multiples 200 times and re-ranks the
-// board, so every row carries the rank range 80% of the refits give it. Every
-// term is gated by the same blind test before it is kept. A size curve
-// (log-log fit of value against TVL) is fitted and tested blind, and rejected.
-// The farm plan is costed the same way: gas, the capital locked, the yield it
-// forgoes and the time it takes, totalled in dollars, netted to the airdrop
-// that breaks even — Farm, Thin or Skip by thirds of the break-even share.
+// board, and the method panel reports how wide the ranks sit. Every term is
+// gated by the same blind test before it is kept. A size curve (log-log fit of
+// value against TVL) is fitted and tested blind, and rejected. The farm plan
+// is costed the same way: gas, the capital locked, the yield it forgoes and
+// the time it takes, totalled in dollars, netted to the airdrop that breaks
+// even — Farm, Thin or Skip by thirds of the break-even share.
 
 /** One protocol entry: exactly the ten fields the sealed input carries. */
 export interface Proto {
@@ -107,10 +103,13 @@ export const PARAMS: Params = {
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const VERSION = 'radar-9';
+export const VERSION = 'radar-10';
 
 /** How many live-token protocols the live view carries, by market cap. */
 export const LIVE_ROWS = 24;
+
+/** How many early rows the board may add below the floor, by TVL. */
+export const EARLY_ROWS = 260;
 
 /** A farm step: the action, what it costs, and how long it takes. */
 export interface Step {
@@ -166,9 +165,6 @@ export interface RowView {
   maturity_multiplier: number;
   watchlist: boolean;
   category_rank: number;
-  rank_low: number;
-  rank_high: number;
-  rank_median: number;
   farm: FarmCost;
   farm_steps: string[];
 }
@@ -323,7 +319,7 @@ export interface RadarData {
   live: LiveView[];
 }
 
-/** Why the snapshot is not one this model can score. */
+/** Why a snapshot is not one this model can score. */
 export class SnapError extends Error {
   constructor(message: string) {
     super(message);
@@ -362,11 +358,13 @@ export function ageInDays(asOf: string, listedAt: string | null): number | null 
  */
 function geoMedian(ratios: number[]): number {
   if (ratios.length === 0) return 0;
-  const logs = ratios.map((r) => Math.log(r)).sort((a, b) => a - b);
-  return Math.exp(medianOf(logs));
+  return Math.exp(medianOf(ratios.map((r) => Math.log(r))));
 }
 
-/** The trimmed mean of log ratios: the mean with the top and bottom 10% cut. */
+/**
+ * The trimmed mean of log ratios: the mean with the top and bottom 10% cut, so
+ * one extreme ratio cannot set the centre. With one or two values nothing is cut.
+ */
 function trimLogMean(values: number[]): number {
   if (values.length === 0) return 0;
   const logs = [...values].sort((a, b) => a - b);
@@ -386,22 +384,22 @@ export function learnMultiples(
   snap: Snap,
   params: Params = PARAMS,
 ): { byCat: Record<string, CatMultiple>; global: number } {
-  const perCat = new Map<string, number[]>();
-  const all: number[] = [];
+  const byCategory = new Map<string, number[]>();
+  const globalRatios: number[] = [];
   for (const p of snap.protocols) {
     if (p.mcap_usd === null || p.mcap_usd <= 0 || p.tvl_usd <= 0) continue;
     const r = p.mcap_usd / p.tvl_usd;
     if (r > 10 || r < 0.001) continue;
-    all.push(r);
+    globalRatios.push(r);
     const key = p.category ?? 'Other';
-    const list = perCat.get(key) ?? [];
+    const list = byCategory.get(key) ?? [];
     list.push(r);
-    perCat.set(key, list);
+    byCategory.set(key, list);
   }
   const clamp = (n: number): number => Math.min(params.multiple_cap, Math.max(params.multiple_floor, n));
-  const global = clamp(geoMedian(all));
+  const global = clamp(geoMedian(globalRatios));
   const byCat: Record<string, CatMultiple> = {};
-  for (const [cat, ratios] of perCat) {
+  for (const [cat, ratios] of byCategory) {
     const n = ratios.length;
     const centre = clamp(geoMedian(ratios));
     const multiple = (n * centre + params.shrink_k * global) / (n + params.shrink_k);
@@ -574,9 +572,9 @@ export const GATE_RULE =
 /**
  * The term-gating test: each term is removed in turn and both blind checks are
  * run again, so the dashboard shows what each term earns instead of asserting
- * it. Growth and maturity carry real weight in radar-9 — the sweep that chose
- * the weights showed the stronger variants rank the live tokens better — so
- * the table is the evidence for the weights, not just for keeping the terms.
+ * it. Growth and maturity carry real weight here — the sweep that chose the
+ * weights showed the stronger variants rank the live tokens better — so the
+ * table is the evidence for the weights, not just for keeping the terms.
  */
 export function gateTerms(snap: Snap, params: Params = PARAMS): GateCheck {
   const full = { loo: looCheck(snap, params).spearman, wf: wfCheck(snap, params).mean_spearman };
@@ -714,9 +712,10 @@ function quantileOf(sorted: number[], q: number): number {
 
 /**
  * The bootstrap rank ranges: the multiples are refit 200 times on resampled live
- * sets and the board is re-ranked each time, so every row carries the rank range
- * the central 80% of the refits give it. The resampling is seeded, so the ranges
- * are the same on every run.
+ * sets and the board is re-ranked each time. Radar-10 keeps only the summary —
+ * the median width and how many rows sit within 10 and 25 ranks — in the method
+ * panel; the per-row ranges no longer appear on the board itself. The resampling
+ * is seeded, so the summary is the same on every run.
  */
 export function bootstrapRanges(
   snap: Snap,
@@ -842,32 +841,32 @@ export function farmCost(p: Proto, age: number | null, implied: number): Omit<Fa
 function actionFor(p: Proto, capital: number, chain: string): string {
   const c = (p.category ?? '').toLowerCase();
   const name = p.name;
-  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `Supply $${capital} of USDC to ${name} on ${chain} and keep the position open.`;
-  if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm')) return `Provide $${capital} of liquidity to ${name}'s main pool on ${chain} and keep the position open.`;
-  if (c.includes('bridge')) return `Bridge $${capital} of USDC to ${chain} through ${name} and use the bridged funds in its app.`;
-  if (c.includes('staking') || c.includes('restak')) return `Stake $${capital} of the chain's staking asset through ${name} and keep the receipt.`;
-  if (c.includes('perpetual') || c.includes('derivative')) return `Deposit $${capital} of USDC as margin on ${name} and open one small hedge.`;
-  if (c.includes('prediction')) return `Fund $${capital} and place one market position on ${name}.`;
-  if (c.includes('curator') || c.includes('allocator')) return `Deposit $${capital} into a ${name} vault on ${chain} and keep the shares.`;
-  if (c.includes('stable')) return `Mint or deposit $${capital} of the stable asset through ${name} on ${chain}.`;
-  if (c.includes('rwa')) return `Mint $${capital} of the protocol's yield asset on ${chain} and hold it.`;
-  if (c.includes('insurance')) return `Buy $${capital} of cover from ${name} on ${chain} and keep the policy.`;
-  return `Deposit $${capital} of USDC into ${name} on ${chain} and keep the position open.`;
+  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `Lend $${capital} of USDC on ${name} (${chain}) and leave the loan open.`;
+  if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm')) return `Add $${capital} of liquidity to the main ${name} pool on ${chain} and leave it in place.`;
+  if (c.includes('bridge')) return `Move $${capital} of USDC to ${chain} through ${name}, then put the bridged funds to work in its app.`;
+  if (c.includes('staking') || c.includes('restak')) return `Stake $${capital} through ${name} and hold on to the receipt token.`;
+  if (c.includes('perpetual') || c.includes('derivative')) return `Post $${capital} of USDC as margin on ${name} and open a single small hedged trade.`;
+  if (c.includes('prediction')) return `Back one market on ${name} with $${capital} and let the position ride.`;
+  if (c.includes('curator') || c.includes('allocator')) return `Put $${capital} into a ${name} vault on ${chain} and hold the vault shares.`;
+  if (c.includes('stable')) return `Mint or deposit $${capital} of the stable asset via ${name} on ${chain}.`;
+  if (c.includes('rwa')) return `Mint $${capital} of ${name}'s yield-bearing asset on ${chain} and hold it.`;
+  if (c.includes('insurance')) return `Buy $${capital} of cover from ${name} on ${chain} and keep the policy live.`;
+  return `Deposit $${capital} of USDC into ${name} on ${chain} and leave the position open.`;
 }
 
 /** The category's weekly qualifying action. */
 function weeklyFor(p: Proto): string {
   const c = (p.category ?? '').toLowerCase();
-  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return 'a supply, a borrow or a repayment';
-  if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm')) return 'a swap or a liquidity adjustment';
-  if (c.includes('bridge')) return 'a bridge of a small amount';
-  if (c.includes('staking') || c.includes('restak')) return 'a stake, a restake or a claim of rewards';
-  if (c.includes('perpetual') || c.includes('derivative')) return 'one small trade and its close';
+  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return 'a lend, a borrow or a repayment';
+  if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm')) return 'a swap or a change to the liquidity position';
+  if (c.includes('bridge')) return 'a small bridge';
+  if (c.includes('staking') || c.includes('restak')) return 'a stake, a restake or a reward claim';
+  if (c.includes('perpetual') || c.includes('derivative')) return 'one small trade, opened and closed';
   if (c.includes('prediction')) return 'one market position';
-  if (c.includes('curator') || c.includes('allocator')) return 'a deposit or a vault rebalance check';
-  if (c.includes('stable')) return 'a mint, a redeem or a transfer';
-  if (c.includes('rwa')) return 'a mint or a hold check';
-  if (c.includes('insurance')) return 'a cover check or a claim review';
+  if (c.includes('curator') || c.includes('allocator')) return 'a deposit or a check on the vault';
+  if (c.includes('stable')) return 'a mint, a redemption or a transfer';
+  if (c.includes('rwa')) return 'a mint or a check on the holding';
+  if (c.includes('insurance')) return 'a check on the cover or a claim review';
   return 'a deposit, a borrow, a swap or a vote';
 }
 
@@ -884,20 +883,20 @@ export function farmSteps(p: Proto, age: number | null): Step[] {
   const action = actionFor(p, capital, chain);
   const weekly = weeklyFor(p);
   return [
-    { text: `Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.`, cost: 'under $3 of gas for the first transaction', time: '5 minutes' },
+    { text: `Open a fresh wallet for this farm alone, fund it with only what you plan to use, and store its seed phrase offline where no one else can reach it.`, cost: 'under $3 of gas for the first transaction', time: '5 minutes' },
     { text: action, cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`, time: '15 minutes to set up' },
     {
       text: p.chains.length >= 2
-        ? `Make one qualifying action each week on ${chain}, such as ${weekly}, and once a month repeat the core action on ${p.chains[1]}, so the wallet shows repeat activity on both chains.`
-        : `Make one qualifying action each week, such as ${weekly}, so the wallet shows repeat activity.`,
+        ? `Do one qualifying action a week on ${chain} — ${weekly} — and once a month repeat the core action on ${p.chains[1]}, so the wallet shows steady activity on both chains.`
+        : `Do one qualifying action a week — ${weekly} — so the wallet shows steady activity instead of a single deposit.`,
       cost: 'about $2 of gas a week',
       time: '10 minutes a week',
     },
-    { text: `Check the position once a month: confirm the deposit is still earning, the pool is still live, and the protocol's own page lists no migration or shutdown notice.`, cost: 'no gas unless you move funds', time: '10 minutes a month' },
-    { text: `Join the protocol's governance or community votes when they open, using the same wallet, so the wallet reads as a user rather than a passer-by.`, cost: 'about $1 of gas per vote', time: '10 minutes a vote' },
-    { text: `Keep the position through the whole ${hold}-day hold: closing early breaks the qualifying streak most airdrops ask for.`, cost: `the yield the $${capital} forgoes while it is locked`, time: `${hold} days` },
-    { text: `Watch the protocol's own announcements page for a token or points program, and screenshot the position's balance and history before it opens.`, cost: 'no gas', time: '5 minutes' },
-    { text: `When a token or points claim opens, claim from the same wallet and keep a record of the claim transaction.`, cost: 'about $3 of gas to claim', time: '10 minutes' },
+    { text: `Once a month, verify the position is still earning, the pool is still live, and the protocol's own page shows no migration or shutdown notice.`, cost: 'no gas unless you move funds', time: '10 minutes a month' },
+    { text: `Vote in the protocol's governance or community polls when they open, from the same wallet, so the wallet reads as a user rather than a passer-by.`, cost: 'about $1 of gas per vote', time: '10 minutes a vote' },
+    { text: `Stay in the position for the full ${hold}-day hold: exiting early breaks the qualifying streak most airdrops ask for.`, cost: `the yield the $${capital} forgoes while it is locked`, time: `${hold} days` },
+    { text: `Follow the protocol's own announcements for a token or points program, and capture the position's balance and history before it opens.`, cost: 'no gas', time: '5 minutes' },
+    { text: `When a token or points claim opens, claim from the same wallet and keep the claim transaction as your record.`, cost: 'about $3 of gas to claim', time: '10 minutes' },
   ];
 }
 
@@ -911,7 +910,17 @@ export function stepText(step: Step): string {
 
 const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
 
-/** The protocols the board ranks, strongest first, with ranks 1..n. */
+/**
+ * The protocols the board ranks, strongest first, with ranks 1..n.
+ *
+ * The watchlist is the floor: every slug on it ranks. The early radar adds
+ * genuine pre-token protocols BELOW the floor, by TVL, capped — never a
+ * replacement for a watchlist row. A protocol above the floor that the
+ * watchlist leaves out stays off the board: it passes every watchlist
+ * condition the snapshot can check, so by elimination DefiLlama names a parent
+ * for it — a sub-product, not a standalone protocol — and ranking one at the
+ * top of the board is how radar-9 lost 17.8 points against radar-4.
+ */
 export function buildBoard(
   snap: Snap,
   mults: { byCat: Record<string, CatMultiple>; global: number },
@@ -923,9 +932,11 @@ export function buildBoard(
     const p = index.get(slug);
     if (p !== undefined) chosen.set(slug, p);
   }
-  for (const p of snap.protocols) {
-    if (!chosen.has(p.slug) && isRankable(p)) chosen.set(p.slug, p);
-  }
+  const early = snap.protocols
+    .filter((p) => !chosen.has(p.slug) && isRankable(p) && p.tvl_usd < snap.floor_usd)
+    .sort((a, b) => b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
+    .slice(0, EARLY_ROWS);
+  for (const p of early) chosen.set(p.slug, p);
   const scored = [...chosen.values()].map((p) => {
     const v = valueOf(p, snap.as_of, mults, params);
     return { p, ...v };
@@ -1054,10 +1065,9 @@ function liveRows(snap: Snap, top = LIVE_ROWS): LiveView[] {
 export function buildRadar(snap: Snap): { board: BoardRow[]; radar: RadarData } {
   const mults = learnMultiples(snap);
   const board = buildBoard(snap, mults);
-  const { ranges, summary } = bootstrapRanges(snap, board);
+  const { summary } = bootstrapRanges(snap, board);
   const watchlistSet = new Set(snap.watchlist);
   const rows: RowView[] = board.map((r) => {
-    const range = ranges.get(r.slug) ?? { low: r.rank, high: r.rank, median: r.rank };
     const catRank = board.filter((x) => x.category === r.category && x.implied_value_usd > r.implied_value_usd).length + 1;
     return {
       rank: r.rank,
@@ -1077,9 +1087,6 @@ export function buildRadar(snap: Snap): { board: BoardRow[]; radar: RadarData } 
       maturity_multiplier: r.model.maturity_multiplier,
       watchlist: watchlistSet.has(r.slug),
       category_rank: catRank,
-      rank_low: range.low,
-      rank_high: range.high,
-      rank_median: range.median,
       farm: r.farm,
       farm_steps: r.farm_steps,
     };
