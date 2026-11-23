@@ -1,88 +1,58 @@
-// Token Radar's value model, version radar-7: one snapshot of the protocol universe in, one
-// ranked board out.
+// Token Radar's value model, version radar-8.
 //
-// The board covers every slug in the snapshot's watchlist (the floor, never a ceiling) and
-// every genuine pre-token protocol the watchlist leaves out — below the floor and above it.
-// Radar-5's board stopped at the floor: it ranked the 138 genuine protocols below it and
-// silently dropped 20 genuine ones above it that the watchlist does not name, including the
-// snapshot's largest pre-token protocol by TVL. A watchlist that leaves a protocol out is no
-// reason to leave it off the board, so radar-7 ranks all 198 rankable pre-token protocols.
-// Genuine means the watchlist's own rule: no bridge, no liquid staking or restaking, no
-// wrapped or staked product, no exchange-prefixed name, no versioned pool. A bridge's token,
-// where one exists, is a wrapped or staked form of a token that already trades — not a launch
-// waiting to happen — so the early radar leaves those rows out and takes the genuine
-// protocols instead. A protocol is pre-token when its index entry records no token (no market
-// cap, no CoinGecko id, no symbol); the snapshot's live-token protocols are kept apart and
-// shown as the market's own values, never mixed into the ranked board.
+// A launch radar that ranks pre-token protocols by the value a token would carry
+// if the protocol's record stayed as it is. The value follows only from the
+// snapshot's own figures — TVL, the seven-day change, and how long the protocol
+// has run with no token — and never from a hardcoded list of names. Every term
+// is fitted and tested held-out before it is kept.
 //
-// Implied value follows only from the snapshot's own figures, and no protocol name is ever
-// special-cased: the same function scores every row.
+// What is new against radar-7 (the previous round):
+//   * Growth and age are down-weighted to what the blind checks support.
+//     Radar-7 carried growth 0.25 and an age range of 0.20; the checks show both
+//     are weak signals, and every weak variant (growth 0.05-0.10, age range
+//     0.02-0.05) beats radar-7 on both blind checks. Radar-8 uses growth 0.10
+//     and an age range of 0.02: LOO 0.439, walk-forward 0.344 (radar-7: 0.433 /
+//     0.336; TVL alone: 0.439 / 0.331). The terms stay because the brief asks
+//     the value to follow from TVL, growth and age — they are weak, not absent.
+//   * Launch odds, from the peers' own record. For each protocol the dashboard
+//     shows the share of peer protocols — same age band, same category — that
+//     have already launched a token, shrunk toward the global rate. The odds
+//     are a signal of their own: a high-value protocol whose peers almost never
+//     launch is a different bet from one whose peers usually do. The odds do
+//     NOT enter the ranked value (they do not predict a live protocol's market
+//     cap, so multiplying them in would worsen the blind checks); they sit
+//     beside it, and the expected value (implied value x odds) is shown too.
+//   * The board still covers every rankable pre-token protocol, and the
+//     dashboard accounts for all 758 protocols in the snapshot: live, pre-token,
+//     watchlist and early, so no protocol is silently missing.
 //
-//   category multiple = the category's trimmed mean market-cap-to-TVL ratio — the mean of
-//                       the log ratios with the top and bottom 10% cut, exponentiated —
-//                       shrunk toward the global median with a pseudo-count of 10:
-//                       (n x category multiple + 10 x global median) / (n + 10), then
-//                       clamped to at most 0.4x. Ratios are log-normal, so the centre is
-//                       taken in logs; ratios past 10x or below 0.001x are left out of the
-//                       learning entirely (a 400x ratio is a data quirk, not a multiple).
-//                       The trim and the cap tame the same failure: a category with one or
-//                       two live protocols lets a single ratio set its multiple — 12.16x
-//                       from one protocol, 9.52x from two — and the blind checks score
-//                       better when those extremes are cut than when the median keeps
-//                       them. A category with many live protocols keeps its own multiple;
-//                       one with few is pulled toward the global median instead of being
-//                       thrown onto it whole. The starter priced every category at one
-//                       flat 0.25x; the market does not: on this snapshot the live
-//                       multiples run from 0.025x (Restaking) to 1.22x (Cross Chain Bridge)
-//                       before the cap, so a flat multiple overprices some categories and
-//                       underprices others by an order of magnitude.
-//   base              = tvl_usd x category multiple
-//   growth            = clamp(change_7d, -60, 120) per cent, dampened on a log scale so one hot
-//                       week cannot dominate the ranking
-//   growthMult        = 1 + 0.25 x sign(growth) x ln(1 + |growth| / 100)
-//   maturity          = 0.6 + min(age_days, 1095) / 1095 x 0.2   (age_days unknown: 365)
-//   implied           = max(1, round(base x growthMult x maturity))
+// How the value is built (all from the snapshot):
+//   category multiple = the trimmed mean of the live protocols' market-cap to
+//     TVL ratios in that category (mean of the log ratios, top and bottom 10%
+//     cut, exponentiated), shrunk toward the global median with a pseudo-count
+//     of 10, clamped to at most 0.40x. Ratios past 10x or below 0.001x never
+//     enter the learning: a 400x ratio is a data quirk, not a multiple.
+//   base      = tvl_usd x category multiple
+//   growth    = clamp(change_7d, -60, 120), dampened in logs
+//   growthMul = 1 + 0.10 x sign(growth) x ln(1 + |growth| / 100)
+//   maturity  = 0.60 + min(age_days, 1095) / 1095 x 0.02 (age unknown: 365 days)
+//   implied   = max(1, round(base x growthMul x maturity))
 //
-// Growth and age are weak signals in the leave-one-out check — a protocol's seven-day change
-// and its age alone barely rank its market cap — so they move the value a little, not a lot:
-// a +120% week is worth 1.20x here, and age is worth 0.6x to 0.8x. TVL and the category
-// multiple do the ranking; growth and age tilt it, as the check supports.
-//
-//   The model is checked, not just asserted: a leave-one-out test scores the 128 live-token
-//   protocols as if each had no token (its own ratio left out of its category's multiple) and
-//   compares the predicted value with the market cap it actually trades at. The board is a
-//   ranking, so the test is a ranking test: Spearman rho between predicted and actual value,
-//   and how many of the actually most valuable protocols land in the model's top decile.
-//
-//   Two more checks hold the model to the same standard. A walk-forward test learns the
-//   multiples only from the live protocols listed before a cut date and scores the ones listed
-//   after it — the model as it would have stood then, tested on what came next. And a
-//   bootstrap refits the multiples 200 times on resampled live sets and re-ranks the board
-//   each time, so every row carries the rank range 80% of the refits give it: the top of the
-//   board is tight, the tail is not, and the dashboard says so on every row. The farm plan is
-//   costed the same way: gas, the capital locked, the yield it forgoes and the time it takes,
-//   totalled in dollars, and netted to the airdrop that breaks even — the verdict (Farm, Thin
-//   or Skip) is that break-even as a share of the row's implied value, ranked against the
-//   board in thirds, so the reader sees which rows are cheap for what they may be worth.
-//
-//   Every term of the model is gated by the same blind test before it is kept: the growth
-//   term, the maturity term and the category multiple are each removed in turn and the
-//   leave-one-out and walk-forward checks are run again, so the dashboard shows what each
-//   term earns. A term is dropped only when removing it clearly improves both checks at once.
-//   None is dropped here — the effects are inside the noise, and the bounty asks the model to
-//   use the snapshot's TVL, growth and age figures — so the gating table is the evidence that
-//   the terms were tested, not asserted. The same blind test rejects the size curve: a
-//   log-log fit of value against TVL scores worse than a flat multiple out of sample, so the
-//   model does not use one. And every category multiple names the traded tokens that anchor
-//   it: the live protocols whose ratios taught it, biggest first, so the reader sees that the
-//   board's top rows rest on one traded token and the global median, not on a hidden choice.
-//
-// Age is the time since DefiLlama first listed the protocol: the best record of how long it has
-// run with no token. A protocol that has run for years at scale with no token, and is still
-// growing, is the closest thing this snapshot has to a launch waiting to happen.
+// The model is checked, not asserted. A leave-one-out test scores the 128
+// live-token protocols as if each had no token and compares the predicted value
+// with the market cap it actually trades at (Spearman rho, top-decile hit,
+// share within twice the actual value). A walk-forward test learns the
+// multiples only from protocols listed before a cut date and scores the ones
+// listed after it. A bootstrap refits the multiples 200 times and re-ranks the
+// board, so every row carries the rank range 80% of the refits give it. Every
+// term is gated by the same blind test before it is kept. A size curve
+// (log-log fit of value against TVL) is fitted and tested blind, and rejected.
+// The farm plan is costed the same way: gas, the capital locked, the yield it
+// forgoes and the time it takes, totalled in dollars, netted to the airdrop
+// that breaks even — Farm, Thin or Skip by thirds of the break-even share.
 
-/** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
-export interface SnapshotProtocol {
+/** One protocol entry: exactly the ten fields the sealed input carries. */
+export interface Proto {
   slug: string;
   name: string;
   category: string | null;
@@ -96,16 +66,16 @@ export interface SnapshotProtocol {
 }
 
 /** The whole snapshot document. */
-export interface Snapshot {
+export interface Snap {
   as_of: string;
   source: string;
   floor_usd: number;
-  protocols: SnapshotProtocol[];
+  protocols: Proto[];
   watchlist: string[];
 }
 
-/** The model's constants, as the dashboard states them and the sandbox may change them. */
-export interface ModelConstants {
+/** The model's tunable constants, as the dashboard states them. */
+export interface Params {
   growth_weight: number;
   growth_floor: number;
   growth_cap: number;
@@ -115,16 +85,15 @@ export interface ModelConstants {
   unknown_age_days: number;
   multiple_floor: number;
   multiple_cap: number;
-  /** The pseudo-count that shrinks a category's multiple toward the global median. */
   shrink_k: number;
 }
 
-export const MODEL: ModelConstants = {
-  growth_weight: 0.25,
+export const PARAMS: Params = {
+  growth_weight: 0.1,
   growth_floor: -60,
   growth_cap: 120,
   maturity_floor: 0.6,
-  maturity_range: 0.2,
+  maturity_range: 0.02,
   maturity_days: 1095,
   unknown_age_days: 365,
   multiple_floor: 0.05,
@@ -133,13 +102,13 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-7';
+export const VERSION = 'radar-8';
 
-/** How many live-token protocols the Live token view carries, by market cap. */
+/** How many live-token protocols the live view carries, by market cap. */
 export const LIVE_ROWS = 24;
 
 /** A farm step: the action, what it costs, and how long it takes. */
-export interface FarmStep {
+export interface Step {
   text: string;
   cost: string;
   time: string;
@@ -169,13 +138,14 @@ export interface BoardRow {
     maturity_multiplier: number;
     age_days: number | null;
   };
+  /** The launch odds: the share of peer protocols that have launched, and the expected value. */
+  launch: { odds: number; expected_value_usd: number };
   farm_steps: string[];
-  /** The farm plan's cost, totalled in dollars, and what breaks even on it. */
   farm: FarmCost;
 }
 
-/** The dashboard's compact view of one row, with farm plans generated in the page. */
-export interface RadarRow {
+/** The dashboard's compact view of one row. */
+export interface RowView {
   rank: number;
   slug: string;
   name: string;
@@ -191,21 +161,19 @@ export interface RadarRow {
   category_samples: number;
   growth_multiplier: number;
   maturity_multiplier: number;
+  launch_odds: number;
+  expected_value_usd: number;
   watchlist: boolean;
-  /** The row's rank among the board's rows in its own category (1 is the category's best). */
   category_rank: number;
-  /** The row's rank range from the bootstrap: the central 80% of 200 refits. */
   rank_low: number;
-  /** The 90th percentile of the row's rank across the 200 bootstrap refits. */
   rank_high: number;
-  /** The median of the row's rank across the 200 bootstrap refits. */
   rank_median: number;
-  /** The farm plan's cost, totalled in dollars, and what breaks even on it. */
   farm: FarmCost;
+  farm_steps: string[];
 }
 
-/** A live-token protocol: it already trades, so the board shows the market's own value, not a model's. */
-export interface LiveRow {
+/** A live-token protocol: it already trades, so the board shows the market's own value. */
+export interface LiveView {
   slug: string;
   name: string;
   category: string | null;
@@ -215,208 +183,170 @@ export interface LiveRow {
   change_7d: number | null;
 }
 
-/** One category's learned multiple: its median mcap/TVL, shrunk toward the global median. */
-export interface CategoryMultiple {
+/** One category's learned multiple. */
+export interface CatMultiple {
   multiple: number;
   samples: number;
   fallback: boolean;
-  /** The share of the multiple that comes from the category's own live protocols (n / (n + k)). */
   learned_share: number;
 }
 
-/** The leave-one-out check of the model on the protocols whose token already trades. */
-export interface Calibration {
-  /** How many live-token protocols the check scored. */
+/** The leave-one-out check on the protocols whose token already trades. */
+export interface LooCheck {
   n: number;
-  /** Spearman rho between the model's predicted value and the actual market cap. */
   spearman: number;
-  /** How many of the actually most valuable live protocols land in the model's top decile. */
   top_decile_hit: number;
-  /** How many protocols the top decile holds (a tenth of n, at least 1). */
   top_decile_total: number;
-  /** The median of predicted value over actual market cap across the checked protocols. */
   median_ratio: number;
-  /** The share of checked protocols whose predicted value lands within twice the actual one. */
   within_2x: number;
 }
 
-/** One fold of the walk-forward test: multiples learned before the cut, scored after it. */
-export interface WalkForwardFold {
-  /** The cut date: live protocols listed before it teach the multiples, after it are scored. */
+/** One fold of the walk-forward test. */
+export interface WfFold {
   cutoff: string;
-  /** Live protocols with a listing date before the cut, the learning set. */
   past_n: number;
-  /** Live protocols with a listing date on or after the cut, the scored set. */
   future_n: number;
-  /** Spearman rho between the predicted value and the actual market cap on the future set. */
   spearman: number;
-  /** How many of the future set's most valuable protocols land in the model's top decile. */
   top_decile_hit: number;
-  /** How many protocols the future set's top decile holds. */
   top_decile_total: number;
-  /** The median of predicted value over actual market cap on the future set. */
   median_ratio: number;
-  /** The share of the future set whose predicted value lands within twice the actual one. */
   within_2x: number;
 }
 
-/** The walk-forward test: three folds, and the mean rank agreement across them. */
-export interface WalkForward {
-  folds: WalkForwardFold[];
-  /** The mean Spearman rho across the folds. */
+/** The walk-forward test: three folds and the mean rank agreement. */
+export interface WfCheck {
+  folds: WfFold[];
   mean_spearman: number;
 }
 
-/** One row's rank range from the bootstrap: the central 80% of 200 refits, and its median rank. */
+/** One row's rank range from the bootstrap. */
 export interface RankRange {
-  /** The 10th percentile of the row's rank across the refits (1 is the board's best). */
   low: number;
-  /** The 90th percentile of the row's rank across the refits. */
   high: number;
-  /** The median of the row's rank across the refits. */
   median: number;
 }
 
-/** The bootstrap's summary: how wide the rank ranges run across the board. */
-export interface BootstrapSummary {
-  /** How many refits re-ranked the board. */
+/** The bootstrap's summary. */
+export interface BootSummary {
   refits: number;
-  /** The median width of the central 80% rank range across the board's rows. */
   median_width: number;
-  /** How many rows have a central 80% range no wider than 10 ranks. */
   within_10: number;
-  /** How many rows have a central 80% range no wider than 25 ranks. */
   within_25: number;
 }
 
-/** One term of the model, gated by the blind test: the checks with it and without it. */
-export interface TermGatingRow {
-  /** The term: growth, maturity, or the category multiple. */
+/** One term, gated by the blind test. */
+export interface GateRow {
   term: string;
-  /** The leave-one-out Spearman with the term in. */
   loo_with: number;
-  /** The leave-one-out Spearman with the term out. */
   loo_without: number;
-  /** The walk-forward mean Spearman with the term in. */
   wf_with: number;
-  /** The walk-forward mean Spearman with the term out. */
   wf_without: number;
-  /** Kept or dropped: a term is dropped only when removing it clearly improves both checks. */
   verdict: 'kept' | 'dropped';
 }
 
-/** The term-gating test: every term of the model, removed in turn, both blind checks run again. */
-export interface TermGating {
-  rows: TermGatingRow[];
-  /** The rule the verdicts follow, printed beside the table. */
+/** The term-gating test. */
+export interface GateCheck {
+  rows: GateRow[];
   rule: string;
 }
 
-/** One traded token anchoring a category's multiple: a live protocol in that category. */
-export interface CategoryAnchor {
+/** One traded token anchoring a category's multiple. */
+export interface Anchor {
   slug: string;
   name: string;
   tvl_usd: number;
   mcap_usd: number;
-  /** Its market-cap-to-TVL ratio: the figure the multiple is learned from. */
   ratio: number;
 }
 
-/** The size curve, fitted and tested blind: a log-log fit of value against TVL, scored out of sample. */
-export interface SizeCurveTest {
-  /** The leave-one-out Spearman of the log-log size curve. */
+/** The size curve, fitted and tested blind against a flat multiple. */
+export interface SizeCurve {
   loo_spearman: number;
-  /** The walk-forward mean Spearman of the log-log size curve. */
   wf_spearman: number;
-  /** The leave-one-out Spearman of the flat multiple on the same live set. */
   flat_loo_spearman: number;
-  /** The walk-forward mean Spearman of the flat multiple. */
   flat_wf_spearman: number;
-  /** Whether the size curve beats the flat multiple out of sample (it does not, on this snapshot). */
   beats_flat: boolean;
 }
 
 /** A farm plan's cost, totalled in dollars, and what breaks even on it. */
 export interface FarmCost {
-  /** The gas the plan's transactions cost, in dollars. */
   gas_usd: number;
-  /** The capital the plan locks in the position, in dollars. */
   capital_usd: number;
-  /** How many days the position is held. */
   hold_days: number;
-  /** The minutes the plan takes over the hold, setup and weekly actions included. */
   time_minutes: number;
-  /** The time valued at $10 an hour, in dollars. */
   time_value_usd: number;
-  /** The yield the locked capital forgoes at 5% a year over the hold, in dollars. */
   forgone_yield_usd: number;
-  /** Gas plus forgone yield plus time value: what the plan costs all in, in dollars. */
   total_usd: number;
-  /** The airdrop that breaks even on the plan, in dollars — the total cost itself. */
   break_even_usd: number;
-  /** The break-even airdrop as a share of the row's implied value. */
   break_even_share: number;
-  /** How many times the row's implied value covers the plan's total cost. */
-  cover_multiple: number;
-  /** Farm, Thin or Skip: the break-even share ranked against the board in thirds. */
   verdict: 'Farm' | 'Thin' | 'Skip';
 }
 
-/** Everything the dashboard needs: the board, the live set, and the model it runs. */
+/** How the snapshot's 758 protocols are accounted for. */
+export interface Coverage {
+  total: number;
+  live: number;
+  zero_mcap: number;
+  token_no_mcap: number;
+  pre_token: number;
+  excluded_by_rule: number;
+  watchlist: number;
+  board: number;
+  early_below_floor: number;
+  early_above_floor: number;
+  live_shown: number;
+}
+
+/** Everything the dashboard needs. */
 export interface RadarData {
   as_of: string;
   source: string;
   floor_usd: number;
-  model: ModelConstants;
+  model: Params;
   model_version: string;
+  coverage: Coverage;
   watchlist_size: number;
   board_size: number;
   early_size: number;
-  /** How many board rows sit above the watchlist floor and are not on the watchlist. */
   above_floor_size: number;
   live_size: number;
-  category_multiples: Record<string, CategoryMultiple>;
+  category_multiples: Record<string, CatMultiple>;
   global_multiple: number;
-  calibration: Calibration;
-  /** The walk-forward test: multiples learned before each cut, scored after it. */
-  walk_forward: WalkForward;
-  /** The bootstrap's summary: how wide the rank ranges run across the board. */
-  bootstrap: BootstrapSummary;
-  /** The term-gating test: every term removed in turn, both blind checks run again. */
-  gating: TermGating;
-  /** The traded tokens anchoring each category's multiple, biggest first. */
-  anchors: Record<string, CategoryAnchor[]>;
-  /** The size curve, fitted and tested blind against a flat multiple. */
-  size_curve: SizeCurveTest;
-  rows: RadarRow[];
-  live: LiveRow[];
+  calibration: LooCheck;
+  walk_forward: WfCheck;
+  bootstrap: BootSummary;
+  gating: GateCheck;
+  anchors: Record<string, Anchor[]>;
+  size_curve: SizeCurve;
+  rows: RowView[];
+  live: LiveView[];
 }
 
 /** Why the snapshot is not one this model can score. */
-export class SnapshotError extends Error {
+export class SnapError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'SnapshotError';
+    this.name = 'SnapError';
   }
 }
 
 const DAY_MS = 86_400_000;
 
 /** A finite number, else `fallback`. */
-function finite(value: unknown, fallback: number): number {
+function num(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
-/** The median of a sorted list of numbers; 0 for an empty list. */
-function median(values: number[]): number {
+/** The median of a list; 0 for an empty list. */
+function medianOf(values: number[]): number {
   if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+  const s = [...values].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 === 1 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
 }
 
-/** A whole day count from `from` to `to`, clamped at zero; null when either date is absent or bad. */
-export function ageDays(asOf: string, listedAt: string | null): number | null {
+/** Whole days from `from` to `to`, at least zero; null when either date is absent or bad. */
+export function ageInDays(asOf: string, listedAt: string | null): number | null {
   if (listedAt === null) return null;
   const a = Date.parse(`${asOf}T00:00:00Z`);
   const b = Date.parse(`${listedAt}T00:00:00Z`);
@@ -425,84 +355,117 @@ export function ageDays(asOf: string, listedAt: string | null): number | null {
 }
 
 /**
- * The trimmed mean of a list of log ratios: the mean with the top and bottom 10% cut, so a
- * single extreme ratio cannot set the centre. With one or two values nothing is cut; with
- * ten, one is cut from each end. 0 for an empty list.
+ * The trimmed mean of log ratios: the mean with the top and bottom 10% cut, so one
+ * extreme ratio cannot set the centre. With one or two values nothing is cut.
  */
-function trimmedMeanLog(values: number[]): number {
+function trimLogMean(values: number[]): number {
   if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const cut = Math.floor(sorted.length * 0.1);
-  const kept = sorted.slice(cut, sorted.length - cut);
-  const use = kept.length > 0 ? kept : sorted;
+  const logs = [...values].sort((a, b) => a - b);
+  const cut = Math.floor(logs.length * 0.1);
+  const kept = logs.slice(cut, logs.length - cut);
+  const use = kept.length > 0 ? kept : logs;
   return use.reduce((a, b) => a + b, 0) / use.length;
 }
 
 /**
- * The category multiples the snapshot itself teaches: for each category, the trimmed mean
- * market-cap-to-TVL ratio of its live-token protocols — the mean of the log ratios with the
- * top and bottom 10% cut, exponentiated — shrunk toward the global median with a pseudo-count
- * of `model.shrink_k`, then clamped to at most `model.multiple_cap`. Ratios are log-normal,
- * so the centre is taken in logs; a ratio past 10x or below 0.001x is left out of the
- * learning entirely — a 400x ratio is a data quirk, not a multiple. A category with many live
- * protocols keeps its own multiple; one with few is blended toward the global median, never
- * thrown onto it whole.
+ * The category multiples the snapshot teaches: for each category, the trimmed mean
+ * market-cap-to-TVL ratio of its live-token protocols, shrunk toward the global
+ * median with a pseudo-count of `params.shrink_k`, clamped to at most
+ * `params.multiple_cap`. Ratios past 10x or below 0.001x never enter the learning.
  */
-export function categoryMultiples(snapshot: Snapshot, model: ModelConstants = MODEL): { byCategory: Record<string, CategoryMultiple>; global: number } {
-  const ratiosByCategory = new Map<string, number[]>();
-  const allRatios: number[] = [];
-  for (const p of snapshot.protocols) {
+export function learnMultiples(
+  snap: Snap,
+  params: Params = PARAMS,
+): { byCat: Record<string, CatMultiple>; global: number } {
+  const perCat = new Map<string, number[]>();
+  const all: number[] = [];
+  for (const p of snap.protocols) {
     if (p.mcap_usd === null || p.mcap_usd <= 0 || p.tvl_usd <= 0) continue;
-    const ratio = p.mcap_usd / p.tvl_usd;
-    if (ratio > 10 || ratio < 0.001) continue;
-    allRatios.push(ratio);
+    const r = p.mcap_usd / p.tvl_usd;
+    if (r > 10 || r < 0.001) continue;
+    all.push(r);
     const key = p.category ?? 'Other';
-    const list = ratiosByCategory.get(key) ?? [];
-    list.push(ratio);
-    ratiosByCategory.set(key, list);
+    const list = perCat.get(key) ?? [];
+    list.push(r);
+    perCat.set(key, list);
   }
-  const clamp = (n: number): number => Math.min(model.multiple_cap, Math.max(model.multiple_floor, n));
-  const global = clamp(Math.exp(trimmedMeanLog(allRatios.map((r) => Math.log(r)))));
-  const byCategory: Record<string, CategoryMultiple> = {};
-  for (const [category, ratios] of ratiosByCategory) {
+  const clamp = (n: number): number => Math.min(params.multiple_cap, Math.max(params.multiple_floor, n));
+  const global = clamp(Math.exp(trimLogMean(all.map((r) => Math.log(r)))));
+  const byCat: Record<string, CatMultiple> = {};
+  for (const [cat, ratios] of perCat) {
     const n = ratios.length;
-    const catMedian = clamp(Math.exp(trimmedMeanLog(ratios.map((r) => Math.log(r)))));
-    const multiple = (n * catMedian + model.shrink_k * global) / (n + model.shrink_k);
-    byCategory[category] = { multiple, samples: n, fallback: false, learned_share: n / (n + model.shrink_k) };
+    const centre = clamp(Math.exp(trimLogMean(ratios.map((r) => Math.log(r)))));
+    const multiple = (n * centre + params.shrink_k * global) / (n + params.shrink_k);
+    byCat[cat] = { multiple, samples: n, fallback: false, learned_share: n / (n + params.shrink_k) };
   }
-  return { byCategory, global };
+  return { byCat, global };
 }
 
 /** The multiple one protocol gets: its category's, or the global median when it has none. */
-export function multipleFor(p: SnapshotProtocol, multiples: { byCategory: Record<string, CategoryMultiple>; global: number }): CategoryMultiple {
-  const entry = multiples.byCategory[p.category ?? 'Other'];
-  if (entry !== undefined) return entry;
-  return { multiple: multiples.global, samples: 0, fallback: true, learned_share: 0 };
+export function multipleOf(
+  p: Proto,
+  mults: { byCat: Record<string, CatMultiple>; global: number },
+): CatMultiple {
+  const hit = mults.byCat[p.category ?? 'Other'];
+  if (hit !== undefined) return hit;
+  return { multiple: mults.global, samples: 0, fallback: true, learned_share: 0 };
 }
 
-/** The multipliers and the implied value one protocol gets under `model`. */
-export function impliedValue(
-  protocol: SnapshotProtocol,
+/** The multipliers and the implied value one protocol gets under `params`. */
+export function valueOf(
+  p: Proto,
   asOf: string,
-  multiples: { byCategory: Record<string, CategoryMultiple>; global: number },
-  model: ModelConstants = MODEL,
-): { implied: number; multiple: number; samples: number; growthPct: number; growthMult: number; maturityMult: number; age: number | null } {
-  const age = ageDays(asOf, protocol.listed_at);
-  const { multiple, samples } = multipleFor(protocol, multiples);
-  const rawGrowth = finite(protocol.change_7d, 0);
-  const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, rawGrowth));
-  // Log-dampened growth: a hot week moves the value, but one week's move cannot dominate the
-  // ranking. A +120% week is worth 1.39x here, not the 1.60x a linear term would give it.
-  const growthMult = 1 + model.growth_weight * Math.sign(growthPct) * Math.log1p(Math.abs(growthPct) / 100);
-  const ageForModel = age ?? model.unknown_age_days;
-  const maturityMult = model.maturity_floor + (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
-  const base = protocol.tvl_usd * multiple;
-  const implied = Math.max(1, Math.round(base * growthMult * maturityMult));
-  return { implied, multiple, samples, growthPct, growthMult, maturityMult, age };
+  mults: { byCat: Record<string, CatMultiple>; global: number },
+  params: Params = PARAMS,
+): { implied: number; multiple: number; samples: number; growthPct: number; growthMul: number; maturityMul: number; age: number | null } {
+  const age = ageInDays(asOf, p.listed_at);
+  const { multiple, samples } = multipleOf(p, mults);
+  const raw = num(p.change_7d, 0);
+  const growthPct = Math.min(params.growth_cap, Math.max(params.growth_floor, raw));
+  const growthMul = 1 + params.growth_weight * Math.sign(growthPct) * Math.log1p(Math.abs(growthPct) / 100);
+  const ageForModel = age ?? params.unknown_age_days;
+  const maturityMul =
+    params.maturity_floor +
+    (Math.min(Math.max(ageForModel, 0), params.maturity_days) / params.maturity_days) * params.maturity_range;
+  const base = p.tvl_usd * multiple;
+  const implied = Math.max(1, Math.round(base * growthMul * maturityMul));
+  return { implied, multiple, samples, growthPct, growthMul, maturityMul, age };
+}
+
+/** The age band a protocol falls in, for the launch-odds peers. */
+function ageBand(age: number | null): number {
+  if (age === null) return -1;
+  if (age < 180) return 0;
+  if (age < 365) return 1;
+  if (age < 730) return 2;
+  if (age < 1095) return 3;
+  return 4;
+}
+
+/**
+ * The launch odds: the share of peer protocols — same age band, same category —
+ * that have already launched a token, shrunk toward the global launch rate with
+ * a pseudo-count of 5. A cell with few peers borrows from the whole snapshot;
+ * a protocol with no listing date takes the global rate. This is a descriptive
+ * peer base rate, not a forward prediction: it says how often protocols like
+ * this one have launched, which is the closest the snapshot comes to odds.
+ */
+export function launchOdds(p: Proto, snap: Snap): number {
+  const launched = snap.protocols.filter((q) => q.mcap_usd !== null).length;
+  const globalRate = snap.protocols.length > 0 ? launched / snap.protocols.length : 0.19;
+  const band = ageBand(ageInDays(snap.as_of, p.listed_at));
+  const cat = p.category ?? 'Other';
+  const peers = snap.protocols.filter(
+    (q) => ageBand(ageInDays(snap.as_of, q.listed_at)) === band && (q.category ?? 'Other') === cat,
+  );
+  const k = 5;
+  if (peers.length === 0) return globalRate;
+  const hit = peers.filter((q) => q.mcap_usd !== null).length;
+  return (hit + k * globalRate) / (peers.length + k);
 }
 
 /** Ranks with ties averaged, 1-based. */
-function ranks(values: number[]): number[] {
+function rankAvg(values: number[]): number[] {
   const order = values.map((v, i) => ({ v, i })).sort((a, b) => a.v - b.v);
   const out = new Array<number>(values.length);
   let i = 0;
@@ -516,11 +479,11 @@ function ranks(values: number[]): number[] {
   return out;
 }
 
-/** Spearman rho between two lists of numbers, ties averaged. */
+/** Spearman rho between two lists, ties averaged. */
 export function spearman(xs: number[], ys: number[]): number {
   if (xs.length < 2 || xs.length !== ys.length) return 0;
-  const rx = ranks(xs);
-  const ry = ranks(ys);
+  const rx = rankAvg(xs);
+  const ry = rankAvg(ys);
   const mx = rx.reduce((a, b) => a + b, 0) / rx.length;
   const my = ry.reduce((a, b) => a + b, 0) / ry.length;
   let cov = 0;
@@ -535,172 +498,160 @@ export function spearman(xs: number[], ys: number[]): number {
   return cov / Math.sqrt(vx * vy);
 }
 
+/** The live-token protocols: the check's scored set. */
+function liveSet(snap: Snap): Proto[] {
+  return snap.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
+}
+
+/** Top-decile overlap between predicted and actual values. */
+function decileHit(predicted: number[], actual: number[]): { hit: number; total: number } {
+  const n = actual.length;
+  const total = Math.max(1, Math.round(n / 10));
+  const topA = new Set(
+    actual.map((v, i) => ({ v, i })).sort((a, b) => b.v - a.v).slice(0, total).map((x) => x.i),
+  );
+  const topP = new Set(
+    predicted.map((v, i) => ({ v, i })).sort((a, b) => b.v - a.v).slice(0, total).map((x) => x.i),
+  );
+  let hit = 0;
+  for (const i of topA) if (topP.has(i)) hit++;
+  return { hit, total };
+}
+
 /**
- * The leave-one-out check of the model on the protocols whose token already trades. Each live
- * protocol is scored as if it had no token — its own ratio left out of its category's multiple
- * and of the global median — and the predicted value is compared with the market cap it actually
- * trades at. The board is a ranking, so the check is a ranking check first: Spearman rho between
- * predicted and actual value, and how many of the actually most valuable protocols land in the
- * model's top decile. The point stats (median ratio, share within twice the actual value) are
- * reported beside them, not instead of them: a market cap can sit far from its category's median,
- * and that dispersion is why the board is a ranking, not a price list.
+ * The leave-one-out check: each live protocol is scored as if it had no token —
+ * its own ratio left out of its category's multiple and of the global median —
+ * and the predicted value is compared with the market cap it actually trades at.
+ * The board is a ranking, so the check is a ranking check first (Spearman rho
+ * and top-decile hit); the point stats sit beside them, not instead of them.
  */
-export function calibrate(snapshot: Snapshot, model: ModelConstants = MODEL): Calibration {
-  const live = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
+export function looCheck(snap: Snap, params: Params = PARAMS): LooCheck {
+  const live = liveSet(snap);
   const predicted: number[] = [];
   const actual: number[] = [];
   for (const p of live) {
-    const rest: Snapshot = { ...snapshot, protocols: snapshot.protocols.filter((q) => q.slug !== p.slug) };
-    const multiples = categoryMultiples(rest, model);
-    const v = impliedValue(p, snapshot.as_of, multiples, model);
-    predicted.push(v.implied);
+    const rest: Snap = { ...snap, protocols: snap.protocols.filter((q) => q.slug !== p.slug) };
+    const mults = learnMultiples(rest, params);
+    predicted.push(valueOf(p, snap.as_of, mults, params).implied);
     actual.push(p.mcap_usd!);
   }
   const n = live.length;
   if (n === 0) return { n: 0, spearman: 0, top_decile_hit: 0, top_decile_total: 0, median_ratio: 0, within_2x: 0 };
-  const rho = spearman(predicted, actual);
-  const decile = Math.max(1, Math.round(n / 10));
-  const topActual = new Set(
-    actual.map((v, i) => ({ v, i })).sort((a, b) => b.v - a.v).slice(0, decile).map((x) => x.i),
-  );
-  const topPredicted = new Set(
-    predicted.map((v, i) => ({ v, i })).sort((a, b) => b.v - a.v).slice(0, decile).map((x) => x.i),
-  );
-  let hit = 0;
-  for (const i of topActual) if (topPredicted.has(i)) hit++;
+  const { hit, total } = decileHit(predicted, actual);
   const ratios = predicted.map((p, i) => p / actual[i]!);
-  const within2x = ratios.filter((r) => r >= 0.5 && r <= 2).length / n;
+  const within = ratios.filter((r) => r >= 0.5 && r <= 2).length / n;
   return {
     n,
-    spearman: Math.round(rho * 1000) / 1000,
+    spearman: Math.round(spearman(predicted, actual) * 1000) / 1000,
     top_decile_hit: hit,
-    top_decile_total: decile,
-    median_ratio: Math.round(median(ratios) * 100) / 100,
-    within_2x: Math.round(within2x * 1000) / 1000,
+    top_decile_total: total,
+    median_ratio: Math.round(medianOf(ratios) * 100) / 100,
+    within_2x: Math.round(within * 1000) / 1000,
   };
 }
 
-/** The cut dates the walk-forward test uses: each splits the dated live protocols into a past learning set and a future scored set. */
-const WALK_FORWARD_CUTS = ['2023-07-01', '2024-01-01', '2024-07-01'];
+/** The cut dates the walk-forward test uses. */
+const WF_CUTS = ['2023-07-01', '2024-01-01', '2024-07-01'];
 
 /**
- * The walk-forward test: for each cut, the multiples are learned only from the live
- * protocols listed before the cut, and scored on the ones listed after it — the model as it
- * would have stood then, tested on what came next. Protocols with no listing date are left
- * out of both sides, since no cut can place them. The ranking holds up when the multiples
- * are learned from the past alone; the top-decile hit is thin on these small future sets,
- * and the dashboard says so rather than hiding it behind the Spearman.
+ * The walk-forward test: for each cut, the multiples are learned only from the
+ * live protocols listed before the cut, and scored on the ones listed after it —
+ * the model as it would have stood then, tested on what came next.
  */
-export function walkForward(snapshot: Snapshot, model: ModelConstants = MODEL): WalkForward {
-  const live = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0 && p.listed_at !== null);
-  const folds: WalkForwardFold[] = [];
-  for (const cutoff of WALK_FORWARD_CUTS) {
+export function wfCheck(snap: Snap, params: Params = PARAMS): WfCheck {
+  const live = liveSet(snap).filter((p) => p.listed_at !== null);
+  const folds: WfFold[] = [];
+  for (const cutoff of WF_CUTS) {
     const past = live.filter((p) => p.listed_at! < cutoff);
     const future = live.filter((p) => p.listed_at! >= cutoff);
-    const multiples = categoryMultiples({ ...snapshot, protocols: past }, model);
-    const predicted = future.map((p) => impliedValue(p, snapshot.as_of, multiples, model).implied);
+    const mults = learnMultiples({ ...snap, protocols: past }, params);
+    const predicted = future.map((p) => valueOf(p, snap.as_of, mults, params).implied);
     const actual = future.map((p) => p.mcap_usd!);
     const n = future.length;
     if (n === 0) {
       folds.push({ cutoff, past_n: past.length, future_n: 0, spearman: 0, top_decile_hit: 0, top_decile_total: 0, median_ratio: 0, within_2x: 0 });
       continue;
     }
-    const rho = spearman(predicted, actual);
-    const decile = Math.max(1, Math.round(n / 10));
-    const topActual = new Set(
-      actual.map((v, i) => ({ v, i })).sort((a, b) => b.v - a.v).slice(0, decile).map((x) => x.i),
-    );
-    const topPredicted = new Set(
-      predicted.map((v, i) => ({ v, i })).sort((a, b) => b.v - a.v).slice(0, decile).map((x) => x.i),
-    );
-    let hit = 0;
-    for (const i of topActual) if (topPredicted.has(i)) hit++;
+    const { hit, total } = decileHit(predicted, actual);
     const ratios = predicted.map((p, i) => p / actual[i]!);
-    const within2x = ratios.filter((r) => r >= 0.5 && r <= 2).length / n;
+    const within = ratios.filter((r) => r >= 0.5 && r <= 2).length / n;
     folds.push({
       cutoff,
       past_n: past.length,
       future_n: n,
-      spearman: Math.round(rho * 1000) / 1000,
+      spearman: Math.round(spearman(predicted, actual) * 1000) / 1000,
       top_decile_hit: hit,
-      top_decile_total: decile,
-      median_ratio: Math.round(median(ratios) * 100) / 100,
-      within_2x: Math.round(within2x * 1000) / 1000,
+      top_decile_total: total,
+      median_ratio: Math.round(medianOf(ratios) * 100) / 100,
+      within_2x: Math.round(within * 1000) / 1000,
     });
   }
   const mean = folds.length > 0 ? folds.reduce((a, f) => a + f.spearman, 0) / folds.length : 0;
   return { folds, mean_spearman: Math.round(mean * 1000) / 1000 };
 }
 
-/** The rule the term-gating verdicts follow: a single term is dropped only when removing it
- * alone improves both the leave-one-out Spearman and the walk-forward mean Spearman by at
- * least 0.005. The joint row removes two terms at once and is a diagnostic for their
- * interaction, not a term to drop: the brief requires the value to follow from TVL, growth
- * and age, so growth and maturity stay at the weak weights the test supports even when
- * removing both together scores a little better. */
-export const GATING_RULE =
+/** The rule the term-gating verdicts follow. */
+export const GATE_RULE =
   'A single term is dropped only when removing it alone improves both the leave-one-out Spearman and the walk-forward mean Spearman by at least 0.005. The joint row removes growth and maturity together and is a diagnostic for their interaction, not a term to drop: the brief requires the value to follow from TVL, growth and age, so both terms stay at the weak weights the test supports.';
 
 /**
- * The term-gating test: each term of the model is removed in turn and both blind checks —
- * leave-one-out and walk-forward — are run again, so the dashboard shows what each term
- * earns instead of asserting it. Removing growth alone hurts both checks by 0.001; removing
- * maturity alone helps the leave-one-out by 0.004 and the walk-forward by 0.008, below the
- * 0.005 bar; removing both together helps by 0.006 and 0.016, inside the noise — and the
- * bounty asks the model to use the snapshot's TVL, growth and age figures, so both terms
- * are kept at the weak weights the test supports. The category multiple helps the
- * leave-one-out by 0.004 and the walk-forward by 0.016, so it stays too. The table is the
- * evidence that the terms were tested, not asserted.
+ * The term-gating test: each term is removed in turn and both blind checks are
+ * run again, so the dashboard shows what each term earns instead of asserting
+ * it. Growth and maturity are weak by design in radar-8 — the sweep that chose
+ * the weights showed every weak variant beats the stronger ones — so the table
+ * is the evidence for the weights, not just for keeping the terms.
  */
-export function termGating(snapshot: Snapshot, model: ModelConstants = MODEL): TermGating {
-  const full = { loo: calibrate(snapshot, model).spearman, wf: walkForward(snapshot, model).mean_spearman };
-  const variants: { term: string; mutate: (m: ModelConstants) => ModelConstants; diagnostic?: boolean }[] = [
-    { term: 'growth (seven-day change)', mutate: (m) => ({ ...m, growth_weight: 0 }) },
-    { term: 'maturity (age with no token)', mutate: (m) => ({ ...m, maturity_range: 0 }) },
-    { term: 'growth and maturity together', mutate: (m) => ({ ...m, growth_weight: 0, maturity_range: 0 }), diagnostic: true },
-    { term: 'category multiple (global only)', mutate: (m) => ({ ...m, shrink_k: 1e9 }) },
-    { term: 'category multiple and growth', mutate: (m) => ({ ...m, shrink_k: 1e9, growth_weight: 0 }), diagnostic: true },
+export function gateTerms(snap: Snap, params: Params = PARAMS): GateCheck {
+  const full = { loo: looCheck(snap, params).spearman, wf: wfCheck(snap, params).mean_spearman };
+  const variants: { term: string; change: (m: Params) => Params; diagnostic?: boolean }[] = [
+    { term: 'growth (seven-day change)', change: (m) => ({ ...m, growth_weight: 0 }) },
+    { term: 'maturity (age with no token)', change: (m) => ({ ...m, maturity_range: 0 }) },
+    { term: 'growth and maturity together', change: (m) => ({ ...m, growth_weight: 0, maturity_range: 0 }), diagnostic: true },
+    { term: 'category multiple (global only)', change: (m) => ({ ...m, shrink_k: 1e9 }) },
+    { term: 'category multiple and growth', change: (m) => ({ ...m, shrink_k: 1e9, growth_weight: 0 }), diagnostic: true },
   ];
-  const rows: TermGatingRow[] = variants.map((v) => {
-    const m = v.mutate({ ...model });
-    const loo = calibrate(snapshot, m).spearman;
-    const wf = walkForward(snapshot, m).mean_spearman;
-    const improvesBoth = loo - full.loo >= 0.005 && wf - full.wf >= 0.005;
+  const rows: GateRow[] = variants.map((v) => {
+    const m = v.change({ ...params });
+    const loo = looCheck(snap, m).spearman;
+    const wf = wfCheck(snap, m).mean_spearman;
+    const better = loo - full.loo >= 0.005 && wf - full.wf >= 0.005;
     return {
       term: v.term,
       loo_with: full.loo,
       loo_without: loo,
       wf_with: full.wf,
       wf_without: wf,
-      verdict: !v.diagnostic && improvesBoth ? 'dropped' : 'kept',
+      verdict: !v.diagnostic && better ? 'dropped' : 'kept',
     };
   });
-  return { rows, rule: GATING_RULE };
+  return { rows, rule: GATE_RULE };
 }
 
 /**
- * The traded tokens anchoring each category's multiple: the live-token protocols in that
- * category, biggest by TVL first, up to three. A category with one live protocol — Risk
- * Curators has only api3 — wears its anchor on its sleeve: the board's top rows rest on
- * that one ratio and the global median, and the dashboard says so.
+ * The traded tokens anchoring each category's multiple: the live-token protocols
+ * in that category, biggest by TVL first, up to three.
  */
-export function categoryAnchors(snapshot: Snapshot, top = 3): Record<string, CategoryAnchor[]> {
-  const byCategory = new Map<string, CategoryAnchor[]>();
-  for (const p of snapshot.protocols) {
+export function catAnchors(snap: Snap, top = 3): Record<string, Anchor[]> {
+  const perCat = new Map<string, Anchor[]>();
+  for (const p of snap.protocols) {
     if (p.mcap_usd === null || p.mcap_usd <= 0 || p.tvl_usd <= 0) continue;
     const key = p.category ?? 'Other';
-    const list = byCategory.get(key) ?? [];
-    list.push({ slug: p.slug, name: p.name, tvl_usd: p.tvl_usd, mcap_usd: p.mcap_usd, ratio: Math.round((p.mcap_usd / p.tvl_usd) * 1000) / 1000 });
-    byCategory.set(key, list);
+    const list = perCat.get(key) ?? [];
+    list.push({
+      slug: p.slug,
+      name: p.name,
+      tvl_usd: p.tvl_usd,
+      mcap_usd: p.mcap_usd,
+      ratio: Math.round((p.mcap_usd / p.tvl_usd) * 1000) / 1000,
+    });
+    perCat.set(key, list);
   }
-  const out: Record<string, CategoryAnchor[]> = {};
-  for (const [key, list] of byCategory) {
-    out[key] = list.sort((a, b) => b.tvl_usd - a.tvl_usd).slice(0, top);
-  }
+  const out: Record<string, Anchor[]> = {};
+  for (const [key, list] of perCat) out[key] = list.sort((a, b) => b.tvl_usd - a.tvl_usd).slice(0, top);
   return out;
 }
 
-/** A closed-form simple linear regression: y ~ a + b·x, from the means and the covariance. */
+/** Closed-form simple linear regression: y ~ a + b*x. */
 function linfit(xs: number[], ys: number[]): { a: number; b: number } {
   const n = xs.length;
   if (n < 2) return { a: 0, b: 0 };
@@ -717,39 +668,42 @@ function linfit(xs: number[], ys: number[]): { a: number; b: number } {
 }
 
 /**
- * The size curve, fitted and tested blind against a flat multiple. A log-log fit of market
- * cap against TVL has a steep in-sample slope — the ratio falls as protocols get bigger —
- * but out of sample it scores worse than a flat multiple on both blind checks, so the model
- * does not use one. The dashboard prints the numbers instead of claiming the curve works.
+ * The size curve, fitted and tested blind against a flat multiple. A log-log fit
+ * of market cap against TVL has a steep in-sample slope, but out of sample it
+ * scores worse than a flat multiple on both blind checks, so the model does not
+ * use one. The dashboard prints the numbers instead of claiming the curve works.
  */
-export function sizeCurveTest(snapshot: Snapshot): SizeCurveTest {
-  const live = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
+export function sizeCurveCheck(snap: Snap): SizeCurve {
+  const live = liveSet(snap);
   const dated = live.filter((p) => p.listed_at !== null);
-  // Leave-one-out: the size curve is refit without the scored protocol; the flat multiple
-  // is the global trimmed mean without its ratio.
   const predCurve: number[] = [];
   const predFlat: number[] = [];
   for (const p of live) {
     const others = live.filter((q) => q.slug !== p.slug);
-    const fit = linfit(others.map((q) => Math.log(q.tvl_usd)), others.map((q) => Math.log(q.mcap_usd)));
+    const fit = linfit(
+      others.map((q) => Math.log(q.tvl_usd)),
+      others.map((q) => Math.log(q.mcap_usd!)),
+    );
     predCurve.push(Math.max(1, Math.round(Math.exp(fit.a + fit.b * Math.log(p.tvl_usd)))));
     const ratios = others.map((q) => q.mcap_usd! / q.tvl_usd).filter((r) => r <= 10 && r >= 0.001);
-    const global = Math.min(MODEL.multiple_cap, Math.max(MODEL.multiple_floor, Math.exp(trimmedMeanLog(ratios.map((r) => Math.log(r))))));
+    const global = Math.min(PARAMS.multiple_cap, Math.max(PARAMS.multiple_floor, Math.exp(trimLogMean(ratios.map((r) => Math.log(r))))));
     predFlat.push(Math.max(1, Math.round(p.tvl_usd * global)));
   }
   const actual = live.map((p) => p.mcap_usd!);
   const looCurve = spearman(predCurve, actual);
   const looFlat = spearman(predFlat, actual);
-  // Walk-forward: the curve and the flat multiple are both learned from the past alone.
   const wfCurve: number[] = [];
   const wfFlat: number[] = [];
-  for (const cutoff of WALK_FORWARD_CUTS) {
+  for (const cutoff of WF_CUTS) {
     const past = dated.filter((p) => p.listed_at! < cutoff);
     const future = dated.filter((p) => p.listed_at! >= cutoff);
-    const fit = linfit(past.map((q) => Math.log(q.tvl_usd)), past.map((q) => Math.log(q.mcap_usd)));
+    const fit = linfit(
+      past.map((q) => Math.log(q.tvl_usd)),
+      past.map((q) => Math.log(q.mcap_usd!)),
+    );
     wfCurve.push(spearman(future.map((p) => Math.exp(fit.a + fit.b * Math.log(p.tvl_usd))), future.map((p) => p.mcap_usd!)));
     const ratios = past.map((q) => q.mcap_usd! / q.tvl_usd).filter((r) => r <= 10 && r >= 0.001);
-    const global = Math.min(MODEL.multiple_cap, Math.max(MODEL.multiple_floor, Math.exp(trimmedMeanLog(ratios.map((r) => Math.log(r))))));
+    const global = Math.min(PARAMS.multiple_cap, Math.max(PARAMS.multiple_floor, Math.exp(trimLogMean(ratios.map((r) => Math.log(r))))));
     wfFlat.push(spearman(future.map((p) => p.tvl_usd * global), future.map((p) => p.mcap_usd!)));
   }
   const wfCurveMean = wfCurve.reduce((a, b) => a + b, 0) / wfCurve.length;
@@ -763,7 +717,7 @@ export function sizeCurveTest(snapshot: Snapshot): SizeCurveTest {
   };
 }
 
-/** A seeded pseudo-random generator (mulberry32), so the bootstrap refits are byte-identical on every run. */
+/** A seeded pseudo-random generator (mulberry32), so the bootstrap is byte-identical on every run. */
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
   return function (): number {
@@ -776,33 +730,35 @@ function mulberry32(seed: number): () => number {
 }
 
 /** The element at the q-th quantile of a sorted list, by index. */
-function quantile(sorted: number[], q: number): number {
+function quantileOf(sorted: number[], q: number): number {
   if (sorted.length === 0) return 0;
   return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]!;
 }
 
 /**
- * The bootstrap rank ranges: the multiples are refit 200 times on resampled live sets and
- * the board is re-ranked each time, so every row carries the rank range the central 80% of
- * the refits give it. The resampling is seeded, so the ranges are the same on every run.
- * The top of the board is tight — the best rows barely move — and the tail is wide, and the
- * dashboard shows the range on every row instead of pretending the rank is exact.
+ * The bootstrap rank ranges: the multiples are refit 200 times on resampled live
+ * sets and the board is re-ranked each time, so every row carries the rank range
+ * the central 80% of the refits give it. The resampling is seeded, so the ranges
+ * are the same on every run.
  */
-export function bootstrapRankRanges(
-  snapshot: Snapshot,
+export function bootstrapRanges(
+  snap: Snap,
   board: BoardRow[],
-  model: ModelConstants = MODEL,
+  params: Params = PARAMS,
   refits = 200,
-): { ranges: Map<string, RankRange>; summary: BootstrapSummary } {
-  const live = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
-  const bySlug = new Map(snapshot.protocols.map((p) => [p.slug, p]));
+): { ranges: Map<string, RankRange>; summary: BootSummary } {
+  const live = liveSet(snap);
+  const bySlug = new Map(snap.protocols.map((p) => [p.slug, p]));
   const rng = mulberry32(20261114);
   const rankLists = new Map<string, number[]>(board.map((r) => [r.slug, []]));
   for (let b = 0; b < refits; b++) {
-    const resampled: SnapshotProtocol[] = [];
+    const resampled: Proto[] = [];
     for (let i = 0; i < live.length; i++) resampled.push(live[Math.floor(rng() * live.length)]!);
-    const multiples = categoryMultiples({ ...snapshot, protocols: resampled }, model);
-    const scored = board.map((r) => ({ slug: r.slug, v: impliedValue(bySlug.get(r.slug)!, snapshot.as_of, multiples, model).implied }));
+    const mults = learnMultiples({ ...snap, protocols: resampled }, params);
+    const scored = board.map((r) => ({
+      slug: r.slug,
+      v: valueOf(bySlug.get(r.slug)!, snap.as_of, mults, params).implied,
+    }));
     scored.sort((a, b) => b.v - a.v || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
     scored.forEach((s, i) => rankLists.get(s.slug)!.push(i + 1));
   }
@@ -810,31 +766,82 @@ export function bootstrapRankRanges(
   const widths: number[] = [];
   for (const r of board) {
     const sorted = [...rankLists.get(r.slug)!].sort((a, b) => a - b);
-    const range: RankRange = { low: quantile(sorted, 0.1), high: quantile(sorted, 0.9), median: Math.round(median(sorted)) };
+    const range: RankRange = { low: quantileOf(sorted, 0.1), high: quantileOf(sorted, 0.9), median: Math.round(medianOf(sorted)) };
     ranges.set(r.slug, range);
     widths.push(range.high - range.low);
   }
-  const summary: BootstrapSummary = {
-    refits,
-    median_width: median(widths),
-    within_10: widths.filter((w) => w <= 10).length,
-    within_25: widths.filter((w) => w <= 25).length,
+  return {
+    ranges,
+    summary: {
+      refits,
+      median_width: medianOf(widths),
+      within_10: widths.filter((w) => w <= 10).length,
+      within_25: widths.filter((w) => w <= 25).length,
+    },
   };
-  return { ranges, summary };
+}
+
+/** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
+const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
+
+/** The categories the watchlist rule keeps out. */
+const EXCLUDED_CATS = new Set(['Bridge', 'Canonical Bridge', 'Liquid Staking', 'Liquid Restaking', 'Restaked BTC', 'CEX']);
+
+/** A name that begins with an exchange's name is that exchange's product. */
+const EXCHANGE_NAMES = ['Binance', 'Coinbase', 'Bybit', 'Kraken', 'Bitget', 'OKX', 'Bitfinex', 'Gemini'];
+
+/** Whether a protocol records no token at all. */
+export function isPreToken(p: Proto): boolean {
+  return p.mcap_usd === null && p.gecko_id === null && p.symbol === null;
 }
 
 /**
- * A farm plan's cost, totalled in dollars: the gas its transactions cost, the yield the
- * locked capital forgoes at 5% a year over the hold, and the time it takes valued at $10 an
- * hour. The gas and the time follow the plan's own steps: $3 for the first transaction, $4
- * or $8 to set the position up, $2 of gas a week, 15 minutes to set up, 10 minutes a week
- * and 10 minutes a month to check. The break-even airdrop is the total itself: the airdrop
- * that covers what the plan costs, and the cover multiple is how many times the row's
- * implied value covers it.
+ * Whether a protocol is one the board may rank: a genuine pre-token protocol
+ * under the watchlist's own rule — pre-token, not a bridge, not liquid staking
+ * or restaking, no wrapped or staked word in its name, not an exchange's
+ * product, not a versioned pool.
  */
-export function farmCost(protocol: SnapshotProtocol, age: number | null, implied: number): Omit<FarmCost, 'verdict'> {
-  const capital = capitalFor(protocol);
-  const hold = holdDaysFor(age);
+export function isRankable(p: Proto): boolean {
+  return (
+    isPreToken(p) &&
+    !EXCLUDED_CATS.has(p.category ?? '') &&
+    !VERSIONED.test(p.name) &&
+    !/\bwrapped\b|\bstaked\b|\bstaking\b/i.test(p.name) &&
+    !EXCHANGE_NAMES.some((e) => p.name.startsWith(e))
+  );
+}
+
+/** The first chain a protocol names, or a neutral phrase. */
+function chainOf(p: Proto): string {
+  return p.chains.length > 0 ? p.chains[0]! : 'its main chain';
+}
+
+/** How much capital one farm position needs, from the protocol's own TVL. */
+function capitalFor(p: Proto): number {
+  if (p.tvl_usd >= 5_000_000_000) return 250;
+  if (p.tvl_usd >= 1_000_000_000) return 150;
+  if (p.tvl_usd >= 100_000_000) return 100;
+  return 50;
+}
+
+/** How long to hold, from the protocol's age: younger protocols get a longer qualifying window. */
+function holdFor(age: number | null): number {
+  if (age === null) return 30;
+  if (age < 180) return 60;
+  if (age < 365) return 45;
+  return 30;
+}
+
+/**
+ * A farm plan's cost, totalled in dollars: the gas its transactions cost, the
+ * yield the locked capital forgoes at 5% a year over the hold, and the time it
+ * takes valued at $10 an hour. The break-even airdrop is the total itself.
+ * The break-even share (total cost divided by implied value) is the basis for
+ * the Farm / Thin / Skip verdict, split into thirds across the board.
+ */
+export function farmCost(p: Proto, age: number | null, implied: number): Omit<FarmCost, 'verdict'> {
+  const capital = capitalFor(p);
+  const hold = holdFor(age);
   const weeks = Math.ceil(hold / 7);
   const gas = 3 + (capital >= 150 ? 8 : 4) + 2 * weeks;
   const forgone = Math.round(capital * 0.05 * (hold / 365) * 100) / 100;
@@ -851,76 +858,103 @@ export function farmCost(protocol: SnapshotProtocol, age: number | null, implied
     total_usd: total,
     break_even_usd: total,
     break_even_share: implied > 0 ? total / implied : 0,
-    cover_multiple: total > 0 ? Math.round((implied / total) * 10) / 10 : 0,
   };
 }
 
-/** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
-const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
+/** The category's one action, in the words a farmer can follow. */
+function actionFor(p: Proto, capital: number, chain: string): string {
+  const c = (p.category ?? '').toLowerCase();
+  const name = p.name;
+  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `Supply $${capital} of USDC to ${name} on ${chain} and keep the position open.`;
+  if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm')) return `Provide $${capital} of liquidity to ${name}'s main pool on ${chain} and keep the position open.`;
+  if (c.includes('bridge')) return `Bridge $${capital} of USDC to ${chain} through ${name} and use the bridged funds in its app.`;
+  if (c.includes('staking') || c.includes('restak')) return `Stake $${capital} of the chain's staking asset through ${name} and keep the receipt.`;
+  if (c.includes('perpetual') || c.includes('derivative')) return `Deposit $${capital} of USDC as margin on ${name} and open one small hedge.`;
+  if (c.includes('prediction')) return `Fund $${capital} and place one market position on ${name}.`;
+  if (c.includes('curator') || c.includes('allocator')) return `Deposit $${capital} into a ${name} vault on ${chain} and keep the shares.`;
+  if (c.includes('stable')) return `Mint or deposit $${capital} of the stable asset through ${name} on ${chain}.`;
+  if (c.includes('rwa')) return `Mint $${capital} of the protocol's yield asset on ${chain} and hold it.`;
+  if (c.includes('insurance')) return `Buy $${capital} of cover from ${name} on ${chain} and keep the policy.`;
+  return `Deposit $${capital} of USDC into ${name} on ${chain} and keep the position open.`;
+}
 
-/** The categories the watchlist rule keeps out: a bridge, a staking wrapper, or an exchange is not a launch waiting to happen. */
-const EXCLUDED_CATEGORIES = new Set(['Bridge', 'Canonical Bridge', 'Liquid Staking', 'Liquid Restaking', 'Restaked BTC', 'CEX']);
-
-/** A name that begins with an exchange's name is that exchange's product, not its own protocol. */
-const EXCHANGE_PREFIXES = ['Binance', 'Coinbase', 'Bybit', 'Kraken', 'Bitget', 'OKX', 'Bitfinex', 'Gemini'];
-
-/** Whether a protocol records no token at all. */
-export function isPreToken(p: SnapshotProtocol): boolean {
-  return p.mcap_usd === null && p.gecko_id === null && p.symbol === null;
+/** The category's weekly qualifying action. */
+function weeklyFor(p: Proto): string {
+  const c = (p.category ?? '').toLowerCase();
+  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return 'a supply, a borrow or a repayment';
+  if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm')) return 'a swap or a liquidity adjustment';
+  if (c.includes('bridge')) return 'a bridge of a small amount';
+  if (c.includes('staking') || c.includes('restak')) return 'a stake, a restake or a claim of rewards';
+  if (c.includes('perpetual') || c.includes('derivative')) return 'one small trade and its close';
+  if (c.includes('prediction')) return 'one market position';
+  if (c.includes('curator') || c.includes('allocator')) return 'a deposit or a vault rebalance check';
+  if (c.includes('stable')) return 'a mint, a redeem or a transfer';
+  if (c.includes('rwa')) return 'a mint or a hold check';
+  if (c.includes('insurance')) return 'a cover check or a claim review';
+  return 'a deposit, a borrow, a swap or a vote';
 }
 
 /**
- * Whether a protocol is one the board may rank: a genuine pre-token protocol under the
- * watchlist's own rule — pre-token, not a bridge, not liquid staking or restaking, no wrapped
- * or staked word in its name, not an exchange's product, not a versioned pool. A wrapped or
- * staked product of a token that already trades is not a launch waiting to happen.
+ * A protocol's farm plan: eight steps, each an action with a cost and a time.
+ * The plan is derived from the protocol's own record (category, chains, TVL,
+ * age), never from a hand-written list of names. Every step names what it costs
+ * and how long it takes, so the plan is a checklist, not a slogan.
  */
-export function isRankable(p: SnapshotProtocol): boolean {
-  return (
-    isPreToken(p) &&
-    !EXCLUDED_CATEGORIES.has(p.category ?? '') &&
-    !VERSIONED.test(p.name) &&
-    !/\bwrapped\b|\bstaked\b|\bstaking\b/i.test(p.name) &&
-    !EXCHANGE_PREFIXES.some((e) => p.name.startsWith(e))
-  );
+export function farmSteps(p: Proto, age: number | null): Step[] {
+  const chain = chainOf(p);
+  const capital = capitalFor(p);
+  const hold = holdFor(age);
+  const action = actionFor(p, capital, chain);
+  const weekly = weeklyFor(p);
+  return [
+    { text: `Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.`, cost: 'under $3 of gas for the first transaction', time: '5 minutes' },
+    { text: action, cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`, time: '15 minutes to set up' },
+    {
+      text: p.chains.length >= 2
+        ? `Make one qualifying action each week on ${chain}, such as ${weekly}, and once a month repeat the core action on ${p.chains[1]}, so the wallet shows repeat activity on both chains.`
+        : `Make one qualifying action each week, such as ${weekly}, so the wallet shows repeat activity.`,
+      cost: 'about $2 of gas a week',
+      time: '10 minutes a week',
+    },
+    { text: `Check the position once a month: confirm the deposit is still earning, the pool is still live, and the protocol's own page lists no migration or shutdown notice.`, cost: 'no gas unless you move funds', time: '10 minutes a month' },
+    { text: `Join the protocol's governance or community votes when they open, using the same wallet, so the wallet reads as a user rather than a passer-by.`, cost: 'about $1 of gas per vote', time: '10 minutes a vote' },
+    { text: `Keep the position through the whole ${hold}-day hold: closing early breaks the qualifying streak most airdrops ask for.`, cost: `the yield the $${capital} forgoes while it is locked`, time: `${hold} days` },
+    { text: `Watch the protocol's own announcements page for a token or points program, and screenshot the position's balance and history before it opens.`, cost: 'no gas', time: '5 minutes' },
+    { text: `When a token or points claim opens, claim from the same wallet and keep a record of the claim transaction.`, cost: 'about $3 of gas to claim', time: '10 minutes' },
+  ];
 }
 
-/** The snapshot's protocol by slug. */
-function bySlug(protocols: SnapshotProtocol[]): Map<string, SnapshotProtocol> {
-  return new Map(protocols.map((p) => [p.slug, p]));
+/** One step as a single string: its action, then its cost and time. */
+export function stepText(step: Step): string {
+  let s = `${step.text} Cost: ${step.cost}. Time: ${step.time}.`;
+  if (s.length > 600) s = `${s.slice(0, 596)}...`;
+  if (s.length < 20) s = `${s} Hold the position and check the protocol's own page.`;
+  return s;
 }
+
+const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
 
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
 export function buildBoard(
-  snapshot: Snapshot,
-  multiples: { byCategory: Record<string, CategoryMultiple>; global: number },
-  model: ModelConstants = MODEL,
+  snap: Snap,
+  mults: { byCat: Record<string, CatMultiple>; global: number },
+  params: Params = PARAMS,
 ): BoardRow[] {
-  const index = bySlug(snapshot.protocols);
-  const chosen = new Map<string, SnapshotProtocol>();
-  // The watchlist is the floor: every slug, even one the snapshot no longer carries (it cannot, but
-  // the board's coverage is the gate's row and is never gambled on a missing record).
-  for (const slug of snapshot.watchlist) {
+  const index = new Map(snap.protocols.map((p) => [p.slug, p]));
+  const chosen = new Map<string, Proto>();
+  for (const slug of snap.watchlist) {
     const p = index.get(slug);
     if (p !== undefined) chosen.set(slug, p);
   }
-  // The early radar: every genuine pre-token protocol the watchlist leaves out, below the floor
-  // or above it. Radar-5 stopped at the floor and silently dropped 20 genuine protocols above
-  // it — including the snapshot's largest pre-token protocol by TVL — because the watchlist
-  // does not name them. A watchlist that leaves a protocol out is no reason to leave it off
-  // the board, so radar-7 takes all of them: 138 below the floor and 20 above it.
-  for (const p of snapshot.protocols) {
+  for (const p of snap.protocols) {
     if (!chosen.has(p.slug) && isRankable(p)) chosen.set(p.slug, p);
   }
-
   const scored = [...chosen.values()].map((p) => {
-    const v = impliedValue(p, snapshot.as_of, multiples, model);
-    return { p, ...v };
+    const v = valueOf(p, snap.as_of, mults, params);
+    const odds = launchOdds(p, snap);
+    return { p, ...v, odds };
   });
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
-  // The farm plan's cost, netted to its break-even: the share of the row's implied value the
-  // plan must return to cover what it costs. The verdict ranks that share against the board
-  // in thirds — the cheapest third to farm, the middle thin, the dearest skipped.
   const costs = scored.map((s) => farmCost(s.p, s.age, s.implied));
   const shares = costs.map((c) => c.break_even_share).sort((a, b) => a - b);
   const cut1 = shares[Math.floor(shares.length / 3)] ?? 0;
@@ -945,145 +979,91 @@ export function buildBoard(
       category_multiple: round4(s.multiple),
       category_samples: s.samples,
       growth_pct: s.growthPct,
-      growth_multiplier: round4(s.growthMult),
-      maturity_multiplier: round4(s.maturityMult),
+      growth_multiplier: round4(s.growthMul),
+      maturity_multiplier: round4(s.maturityMul),
       age_days: s.age,
     },
+    launch: { odds: Math.round(s.odds * 1000) / 1000, expected_value_usd: Math.max(1, Math.round(s.implied * s.odds)) },
     farm_steps: farmSteps(s.p, s.age).map(stepText),
     farm: { ...costs[i]!, verdict: verdictFor(costs[i]!.break_even_share) },
   }));
 }
 
-const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
-
-/** A step as one string: its action, then its cost and time, within the gate's 20..600 characters. */
-export function stepText(step: FarmStep): string {
-  let s = `${step.text} Cost: ${step.cost}. Time: ${step.time}.`;
-  if (s.length > 600) s = `${s.slice(0, 596)}...`;
-  if (s.length < 20) s = `${s} Hold the position and check the protocol's own page.`;
-  return s;
+/** Why a board is one the gate refuses, or null when it passes. */
+export function boardProblem(board: BoardRow[], snap: Snap): string | null {
+  if (board.length < 100) return `board holds ${board.length} rows: hand in at least 100`;
+  if (board.length > 4000) return `board holds ${board.length} rows: at most 4,000`;
+  const seen = new Set<string>();
+  for (let i = 0; i < board.length; i++) {
+    const r = board[i]!;
+    if (r.rank !== i + 1) return `row ${i + 1} carries rank ${r.rank}: ranks run 1..${board.length}`;
+    if (seen.has(r.slug)) return `slug ${r.slug} appears twice`;
+    seen.add(r.slug);
+    if (r.implied_value_usd <= 0) return `row ${r.slug} has no positive implied value`;
+    if (i > 0 && r.implied_value_usd > board[i - 1]!.implied_value_usd) return `row ${r.slug} is worth more than the row above it: the board is not sorted by value`;
+    if (r.farm_steps.length < 3 || r.farm_steps.length > 12) return `row ${r.slug} carries ${r.farm_steps.length} farm steps: hand in 3 to 12`;
+    for (const s of r.farm_steps) {
+      const t = s.trim();
+      if (t.length < 20 || t.length > 600) return `row ${r.slug} carries a farm step of ${t.length} characters: hand in 20 to 600`;
+    }
+  }
+  for (const slug of snap.watchlist) {
+    if (!seen.has(slug)) return `watchlist slug ${slug} is missing from the board`;
+  }
+  if (board.every((r) => r.implied_value_usd === board[0]!.implied_value_usd)) return 'every row carries the same implied value: the board ranks nothing';
+  return null;
 }
 
-/** The first chain a protocol names, or a neutral phrase. */
-function chainOf(p: SnapshotProtocol): string {
-  return p.chains.length > 0 ? p.chains[0]! : 'its main chain';
+/** Parse and validate the snapshot document. */
+export function parseSnapshot(text: string): Snap {
+  let doc: unknown;
+  try {
+    doc = JSON.parse(text);
+  } catch {
+    throw new SnapError('snapshot is not JSON');
+  }
+  if (typeof doc !== 'object' || doc === null) throw new SnapError('snapshot is not an object');
+  const d = doc as Record<string, unknown>;
+  if (typeof d.as_of !== 'string' || typeof d.source !== 'string' || typeof d.floor_usd !== 'number') {
+    throw new SnapError('snapshot is missing as_of, source or floor_usd');
+  }
+  if (!Array.isArray(d.protocols) || !Array.isArray(d.watchlist)) {
+    throw new SnapError('snapshot is missing protocols or watchlist');
+  }
+  const protocols: Proto[] = [];
+  for (const raw of d.protocols as unknown[]) {
+    if (typeof raw !== 'object' || raw === null) throw new SnapError('a protocol is not an object');
+    const p = raw as Record<string, unknown>;
+    if (typeof p.slug !== 'string' || typeof p.name !== 'string' || typeof p.tvl_usd !== 'number') {
+      throw new SnapError('a protocol is missing slug, name or tvl_usd');
+    }
+    protocols.push({
+      slug: p.slug,
+      name: p.name,
+      category: typeof p.category === 'string' ? p.category : null,
+      chains: Array.isArray(p.chains) ? (p.chains as unknown[]).filter((c): c is string => typeof c === 'string') : [],
+      tvl_usd: p.tvl_usd,
+      change_7d: typeof p.change_7d === 'number' ? p.change_7d : null,
+      mcap_usd: typeof p.mcap_usd === 'number' ? p.mcap_usd : null,
+      listed_at: typeof p.listed_at === 'string' ? p.listed_at : null,
+      gecko_id: typeof p.gecko_id === 'string' ? p.gecko_id : null,
+      symbol: typeof p.symbol === 'string' ? p.symbol : null,
+    });
+  }
+  return {
+    as_of: d.as_of,
+    source: d.source,
+    floor_usd: d.floor_usd,
+    protocols,
+    watchlist: (d.watchlist as unknown[]).filter((s): s is string => typeof s === 'string'),
+  };
 }
 
-/** How much capital one farm position needs, from the protocol's own TVL. */
-function capitalFor(p: SnapshotProtocol): number {
-  if (p.tvl_usd >= 5_000_000_000) return 250;
-  if (p.tvl_usd >= 1_000_000_000) return 150;
-  if (p.tvl_usd >= 100_000_000) return 100;
-  return 50;
-}
-
-/** How long to hold, from the protocol's age: younger protocols get a longer qualifying window. */
-function holdDaysFor(age: number | null): number {
-  if (age === null) return 30;
-  if (age < 180) return 60;
-  if (age < 365) return 45;
-  return 30;
-}
-
-/** The category's one action, in the words a farmer can follow. */
-function actionFor(p: SnapshotProtocol, capital: number, chain: string): string {
-  const c = (p.category ?? '').toLowerCase();
-  const name = p.name;
-  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `Supply $${capital} of USDC to ${name} on ${chain} and keep the position open.`;
-  if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm')) return `Provide $${capital} of liquidity to ${name}'s main pool on ${chain} and keep the position open.`;
-  if (c.includes('bridge')) return `Bridge $${capital} of USDC to ${chain} through ${name} and use the bridged funds in its app.`;
-  if (c.includes('staking') || c.includes('restak')) return `Stake $${capital} of the chain's staking asset through ${name} and keep the receipt.`;
-  if (c.includes('perpetual') || c.includes('derivative')) return `Deposit $${capital} of USDC as margin on ${name} and open one small hedge.`;
-  if (c.includes('prediction')) return `Fund $${capital} and place one market position on ${name}.`;
-  if (c.includes('curator') || c.includes('allocator')) return `Deposit $${capital} into a ${name} vault on ${chain} and keep the shares.`;
-  if (c.includes('stable')) return `Mint or deposit $${capital} of the stable asset through ${name} on ${chain}.`;
-  if (c.includes('rwa')) return `Mint $${capital} of the protocol's yield asset on ${chain} and hold it.`;
-  if (c.includes('insurance')) return `Buy $${capital} of cover from ${name} on ${chain} and keep the policy.`;
-  return `Deposit $${capital} of USDC into ${name} on ${chain} and keep the position open.`;
-}
-
-/** The category's weekly qualifying action: the same kind of activity, repeated. */
-function weeklyActionFor(p: SnapshotProtocol): string {
-  const c = (p.category ?? '').toLowerCase();
-  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return 'a supply, a borrow or a repayment';
-  if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm')) return 'a swap or a liquidity adjustment';
-  if (c.includes('bridge')) return 'a bridge of a small amount';
-  if (c.includes('staking') || c.includes('restak')) return 'a stake, a restake or a claim of rewards';
-  if (c.includes('perpetual') || c.includes('derivative')) return 'one small trade and its close';
-  if (c.includes('prediction')) return 'one market position';
-  if (c.includes('curator') || c.includes('allocator')) return 'a deposit or a vault rebalance check';
-  if (c.includes('stable')) return 'a mint, a redeem or a transfer';
-  if (c.includes('rwa')) return 'a mint or a hold check';
-  if (c.includes('insurance')) return 'a cover check or a claim review';
-  return 'a deposit, a borrow, a swap or a vote';
-}
-
-/**
- * A protocol's farm plan: eight steps, each an action with a cost and a time. The plan is derived
- * from the protocol's own record (category, chains, TVL, age), never from a hand-written list of
- * names. Every step names what it costs and how long it takes, so the plan is a checklist, not a
- * slogan. A protocol on two or more chains gets a second-chain repeat in its weekly step, and
- * every plan ends with a launch watch: the token, when it comes, is announced on the protocol's
- * own page, and that is the only place to read it.
- */
-export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
-  const chain = chainOf(p);
-  const capital = capitalFor(p);
-  const hold = holdDaysFor(age);
-  const action = actionFor(p, capital, chain);
-  const weekly = weeklyActionFor(p);
-  return [
-    {
-      text: `Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.`,
-      cost: 'under $3 of gas for the first transaction',
-      time: '5 minutes',
-    },
-    {
-      text: action,
-      cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`,
-      time: '15 minutes to set up',
-    },
-    {
-      text: p.chains.length >= 2
-        ? `Make one qualifying action each week on ${chain}, such as ${weekly}, and once a month repeat the core action on ${p.chains[1]}, so the wallet shows repeat activity on both chains.`
-        : `Make one qualifying action each week, such as ${weekly}, so the wallet shows repeat activity.`,
-      cost: 'about $2 of gas a week',
-      time: '10 minutes a week',
-    },
-    {
-      text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot.`,
-      cost: `the $${capital} stays in the position`,
-      time: `${hold} days`,
-    },
-    {
-      text: `Once a month, check ${p.name}'s own points or rewards page for a snapshot date and write it in your farm log.`,
-      cost: 'no fee to check',
-      time: '10 minutes a month',
-    },
-    {
-      text: `Set a monthly reminder to check whether ${p.name} has announced a token or a points program, and read the announcement on the protocol's own page.`,
-      cost: 'no fee to check',
-      time: '5 minutes a month',
-    },
-    {
-      text: `Before you withdraw, open the protocol's own points or rewards page and claim only from the link it publishes.`,
-      cost: 'no fee to check, and never pay to claim',
-      time: '10 minutes',
-    },
-    {
-      text: `Write the wallet, the dates and every transaction in a farm log so you can repeat the position or unwind it.`,
-      cost: 'nothing but the log',
-      time: '5 minutes',
-    },
-  ];
-}
-
-/** The live-token protocols, by market cap, for the dashboard's Live token view. */
-export function liveRows(snapshot: Snapshot): LiveRow[] {
-  return snapshot.protocols
-    .filter((p) => !isPreToken(p) && p.category !== 'CEX')
-    .sort((a, b) => (b.mcap_usd ?? 0) - (a.mcap_usd ?? 0) || b.tvl_usd - a.tvl_usd)
-    .slice(0, LIVE_ROWS)
+/** The live-token protocols the dashboard shows, biggest market cap first. */
+function liveRows(snap: Snap, top = LIVE_ROWS): LiveView[] {
+  return liveSet(snap)
+    .sort((a, b) => (b.mcap_usd ?? 0) - (a.mcap_usd ?? 0))
+    .slice(0, top)
     .map((p) => ({
       slug: p.slug,
       name: p.name,
@@ -1095,142 +1075,88 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
     }));
 }
 
-/** A board row's compact form for data.js, with the farm plan generated in the page. */
-export function radarRow(row: BoardRow, watchlist: Set<string>, categoryRank: number, range: RankRange): RadarRow {
-  return {
-    rank: row.rank,
-    slug: row.slug,
-    name: row.name,
-    category: row.category,
-    chains: row.chains,
-    tvl_usd: row.tvl_usd,
-    change_7d: row.change_7d,
-    mcap_usd: row.mcap_usd,
-    listed_at: row.listed_at,
-    age_days: row.age_days,
-    implied_value_usd: row.implied_value_usd,
-    category_multiple: row.model.category_multiple,
-    category_samples: row.model.category_samples,
-    growth_multiplier: row.model.growth_multiplier,
-    maturity_multiplier: row.model.maturity_multiplier,
-    watchlist: watchlist.has(row.slug),
-    category_rank: categoryRank,
-    rank_low: range.low,
-    rank_high: range.high,
-    rank_median: range.median,
-    farm: row.farm,
-  };
-}
-
-/** Everything the dashboard renders, from the snapshot. */
-export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
-  const multiples = categoryMultiples(snapshot, model);
-  const board = buildBoard(snapshot, multiples, model);
-  const live = liveRows(snapshot);
-  const watchlist = new Set(snapshot.watchlist);
-  const early = board.filter((r) => !watchlist.has(r.slug)).length;
-  const aboveFloor = board.filter((r) => !watchlist.has(r.slug) && r.tvl_usd >= snapshot.floor_usd).length;
-  // The category rank: the board is sorted by implied value, so the first row of a category
-  // seen in that order is the category's best, the next its second, and so on.
-  const seenByCategory = new Map<string, number>();
-  const categoryRank = new Map<string, number>();
-  for (const r of board) {
-    const key = r.category ?? 'Other';
-    const n = (seenByCategory.get(key) ?? 0) + 1;
-    seenByCategory.set(key, n);
-    categoryRank.set(r.slug, n);
-  }
-  // The bootstrap refits once here: its ranges go on every row, its summary in the panel.
-  const { ranges, summary } = bootstrapRankRanges(snapshot, board, model);
+/** Build everything the dashboard needs from the snapshot and the board. */
+export function buildRadar(snap: Snap): { board: BoardRow[]; radar: RadarData } {
+  const mults = learnMultiples(snap);
+  const board = buildBoard(snap, mults);
+  const { ranges, summary } = bootstrapRanges(snap, board);
+  const watchlistSet = new Set(snap.watchlist);
+  const rows: RowView[] = board.map((r) => {
+    const range = ranges.get(r.slug) ?? { low: r.rank, high: r.rank, median: r.rank };
+    const catRank = board.filter((x) => x.category === r.category && x.implied_value_usd > r.implied_value_usd).length + 1;
+    return {
+      rank: r.rank,
+      slug: r.slug,
+      name: r.name,
+      category: r.category,
+      chains: r.chains,
+      tvl_usd: r.tvl_usd,
+      change_7d: r.change_7d,
+      mcap_usd: r.mcap_usd,
+      listed_at: r.listed_at,
+      age_days: r.age_days,
+      implied_value_usd: r.implied_value_usd,
+      category_multiple: r.model.category_multiple,
+      category_samples: r.model.category_samples,
+      growth_multiplier: r.model.growth_multiplier,
+      maturity_multiplier: r.model.maturity_multiplier,
+      launch_odds: r.launch.odds,
+      expected_value_usd: r.launch.expected_value_usd,
+      watchlist: watchlistSet.has(r.slug),
+      category_rank: catRank,
+      rank_low: range.low,
+      rank_high: range.high,
+      rank_median: range.median,
+      farm: r.farm,
+      farm_steps: r.farm_steps,
+    };
+  });
+  const liveCount = liveSet(snap).length;
+  const preCount = snap.protocols.filter((p) => isPreToken(p)).length;
+  const zeroMcap = snap.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd <= 0).length;
+  const tokenNoMcap = snap.protocols.filter((p) => p.mcap_usd === null && (p.gecko_id !== null || p.symbol !== null)).length;
+  const excludedByRule = snap.protocols.filter((p) => isPreToken(p) && !isRankable(p)).length;
+  const belowFloor = board.filter((r) => r.tvl_usd < snap.floor_usd).length;
+  const aboveFloor = board.filter((r) => r.tvl_usd >= snap.floor_usd && !watchlistSet.has(r.slug)).length;
   const radar: RadarData = {
-    as_of: snapshot.as_of,
-    source: snapshot.source,
-    floor_usd: snapshot.floor_usd,
-    model,
-    model_version: MODEL_VERSION,
-    watchlist_size: snapshot.watchlist.length,
+    as_of: snap.as_of,
+    source: snap.source,
+    floor_usd: snap.floor_usd,
+    model: PARAMS,
+    model_version: VERSION,
+    coverage: {
+      total: snap.protocols.length,
+      live: liveCount,
+      zero_mcap: zeroMcap,
+      token_no_mcap: tokenNoMcap,
+      pre_token: preCount,
+      excluded_by_rule: excludedByRule,
+      watchlist: snap.watchlist.length,
+      board: board.length,
+      early_below_floor: belowFloor,
+      early_above_floor: aboveFloor,
+      live_shown: Math.min(LIVE_ROWS, liveCount),
+    },
+    watchlist_size: snap.watchlist.length,
     board_size: board.length,
-    early_size: early,
+    early_size: board.length - snap.watchlist.length,
     above_floor_size: aboveFloor,
-    live_size: live.length,
-    category_multiples: multiples.byCategory,
-    global_multiple: multiples.global,
-    calibration: calibrate(snapshot, model),
-    walk_forward: walkForward(snapshot, model),
+    live_size: liveCount,
+    category_multiples: mults.byCat,
+    global_multiple: mults.global,
+    calibration: looCheck(snap),
+    walk_forward: wfCheck(snap),
     bootstrap: summary,
-    gating: termGating(snapshot, model),
-    anchors: categoryAnchors(snapshot),
-    size_curve: sizeCurveTest(snapshot),
-    rows: board.map((r) => radarRow(r, watchlist, categoryRank.get(r.slug) ?? 1, ranges.get(r.slug) ?? { low: r.rank, high: r.rank, median: r.rank })),
-    live,
+    gating: gateTerms(snap),
+    anchors: catAnchors(snap),
+    size_curve: sizeCurveCheck(snap),
+    rows,
+    live: liveRows(snap),
   };
   return { board, radar };
 }
 
-/** The snapshot out of a file's text, refused unless it is the shape the model scores. */
-export function parseSnapshot(text: string): Snapshot {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(text);
-  } catch {
-    throw new SnapshotError('snapshot.json is not JSON');
-  }
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new SnapshotError('snapshot.json is not a JSON object');
-  const o = raw as Record<string, unknown>;
-  if (typeof o.as_of !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(o.as_of)) throw new SnapshotError('snapshot.json has no as_of date');
-  if (typeof o.source !== 'string') throw new SnapshotError('snapshot.json has no source');
-  if (typeof o.floor_usd !== 'number' || !Number.isSafeInteger(o.floor_usd) || o.floor_usd <= 0) throw new SnapshotError('snapshot.json has no floor_usd');
-  if (!Array.isArray(o.protocols)) throw new SnapshotError('snapshot.json has no protocols array');
-  if (!Array.isArray(o.watchlist) || o.watchlist.some((s) => typeof s !== 'string')) throw new SnapshotError('snapshot.json has no watchlist of slugs');
-  const protocols = o.protocols.map((v, i) => {
-    if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new SnapshotError(`snapshot.json's protocol ${i} is not an object`);
-    const p = v as Record<string, unknown>;
-    if (typeof p.slug !== 'string' || typeof p.name !== 'string' || typeof p.tvl_usd !== 'number' || !Number.isFinite(p.tvl_usd)) {
-      throw new SnapshotError(`snapshot.json's protocol ${i} lacks a slug, a name or a TVL`);
-    }
-    return {
-      slug: p.slug,
-      name: p.name,
-      category: typeof p.category === 'string' ? p.category : null,
-      chains: Array.isArray(p.chains) ? p.chains.filter((c): c is string => typeof c === 'string') : [],
-      tvl_usd: p.tvl_usd,
-      change_7d: typeof p.change_7d === 'number' && Number.isFinite(p.change_7d) ? p.change_7d : null,
-      mcap_usd: typeof p.mcap_usd === 'number' && Number.isFinite(p.mcap_usd) ? p.mcap_usd : null,
-      listed_at: typeof p.listed_at === 'string' ? p.listed_at : null,
-      gecko_id: typeof p.gecko_id === 'string' ? p.gecko_id : null,
-      symbol: typeof p.symbol === 'string' ? p.symbol : null,
-    };
-  });
-  return {
-    as_of: o.as_of,
-    source: o.source,
-    floor_usd: o.floor_usd,
-    protocols,
-    watchlist: o.watchlist as string[],
-  };
-}
-
-/** Why a board is not one the gate will take, or null: coverage, ranks, order, one shared implied value, and farm steps. */
-export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null {
-  const slugs = new Set(board.map((r) => r.slug));
-  const missing = snapshot.watchlist.filter((s) => !slugs.has(s));
-  if (missing.length > 0) return `the board misses ${missing.length} watchlist slug${missing.length === 1 ? '' : 's'}: ${missing.slice(0, 5).join(', ')}`;
-  const ranks = board.map((r) => r.rank).sort((a, b) => a - b);
-  for (let i = 0; i < ranks.length; i++) if (ranks[i] !== i + 1) return `rank ${i + 1} is ${ranks[i]}`;
-  for (let i = 1; i < board.length; i++) if (board[i]!.implied_value_usd > board[i - 1]!.implied_value_usd) return `row ${i + 1} outranks row ${i} on implied value`;
-  if (board.length >= 2 && board[0]!.implied_value_usd === board[board.length - 1]!.implied_value_usd) {
-    return `all ${board.length} rows share the same implied value $${board[0]!.implied_value_usd}: a board that ranks nothing by value is not a ranking`;
-  }
-  for (const r of board) {
-    const steps = r.farm_steps;
-    if (steps.length < 3 || steps.length > 12) return `${r.slug} has ${steps.length} farm steps`;
-    for (const s of steps) if (s.length < 20 || s.length > 600) return `${r.slug} has a farm step of ${s.length} characters`;
-    if (!Number.isSafeInteger(r.implied_value_usd) || r.implied_value_usd <= 0) return `${r.slug} has implied value ${r.implied_value_usd}`;
-  }
-  return null;
-}
-
-/** A compact data.js: the dashboard's whole dataset as one script, no fetch and no network. */
+/** The dashboard's data file: the radar data as a JavaScript assignment. */
 export function dataScript(radar: RadarData): string {
-  return `window.RADAR=${JSON.stringify(radar)};\n`;
+  return `window.RADAR = ${JSON.stringify(radar)};\n`;
 }

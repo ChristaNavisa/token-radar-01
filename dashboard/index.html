@@ -3,12 +3,91 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Token Radar: pre-token protocols ranked by implied value</title>
+<title>Token Radar — which pre-token protocol is worth farming</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<a class="skip" href="#board">Skip to the board</a>
-<main id="board" tabindex="-1" aria-busy="true"></main>
+<header class="top">
+  <div>
+    <h1>Token Radar</h1>
+    <p class="sub">Every pre-token protocol in the snapshot, ranked by what its token would be worth — and what farming it actually costs.</p>
+    <p class="meta"><span id="asof"></span> · <span id="source"></span> · <span id="modelver"></span></p>
+  </div>
+  <div class="kpi" id="kpi"></div>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>The board <span class="count" id="boardcount"></span></h2>
+    <div class="controls">
+      <label>Search <input id="q" type="search" placeholder="name or slug"></label>
+      <label>Category <select id="cat"><option value="">All categories</option></select></label>
+      <label>Farm <select id="verdict"><option value="">Any verdict</option><option>Farm</option><option>Thin</option><option>Skip</option></select></label>
+      <label><input id="watchonly" type="checkbox"> Watchlist only</label>
+      <label>Min launch odds <input id="minodds" type="number" min="0" max="1" step="0.05" value="0"></label>
+      <label>Sort <select id="sort">
+        <option value="rank">Rank (implied value)</option>
+        <option value="expected">Expected value (implied × odds)</option>
+        <option value="odds">Launch odds</option>
+        <option value="tvl">TVL</option>
+        <option value="cost">Farm cost (cheapest first)</option>
+      </select></label>
+    </div>
+    <div class="tablewrap">
+      <table id="board">
+        <thead><tr>
+          <th>#</th><th>Protocol</th><th>Category</th><th>TVL</th><th>Implied value</th>
+          <th>Launch odds</th><th>Expected value</th><th>Farm</th><th>Rank range</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p class="note" id="shown"></p>
+  </section>
+
+  <section class="panel" id="detail">
+    <h2>Protocol detail</h2>
+    <p class="note" id="detailhint">Click a row in the board to see its model terms, its launch odds, its farm plan and its cost.</p>
+    <div id="detailbody"></div>
+  </section>
+
+  <section class="panel" id="method">
+    <h2>How the ranking is built, and how it was tested</h2>
+    <div id="validation"></div>
+    <p class="note" id="gaterule"></p>
+    <div id="gating"></div>
+    <p class="note" id="sizecurve"></p>
+  </section>
+
+  <section class="panel">
+    <h2>Live tokens — the comps the multiples come from</h2>
+    <p class="note">These 24 protocols already trade. Their market-cap-to-TVL ratios, trimmed and shrunk by category, are what prices the pre-token board. They are shown here, not ranked with it.</p>
+    <div class="tablewrap">
+      <table id="live">
+        <thead><tr><th>Protocol</th><th>Category</th><th>TVL</th><th>Market cap</th><th>Ratio</th><th>7d</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>What the numbers mean</h2>
+    <dl class="glossary">
+      <dt>Implied value</dt><dd>TVL × the category's trimmed-mean market-cap-to-TVL ratio (shrunk toward the global ratio when the category has few live tokens), nudged by a weak growth term and a weak maturity term. Capped at 0.4× TVL at the low end and 4× at the high end.</dd>
+      <dt>Launch odds</dt><dd>The share of peer protocols — same age band and same category — that already have a token, shrunk toward the global launch rate. A first-class column, not a multiplier: multiplying the value by the odds makes the ranking worse on the blind tests, so the board ranks by implied value and shows the odds beside it.</dd>
+      <dt>Expected value</dt><dd>Implied value × launch odds. The value you would expect if the protocol launched at the comps-implied price.</dd>
+      <dt>Farm verdict</dt><dd>Farm, Thin or Skip, from the break-even share: the farm plan's total cost divided by the implied value. The board is split into thirds by that share, so the verdicts are relative to this board, not to an absolute dollar figure.</dd>
+      <dt>Rank range</dt><dd>The central 80% of the ranks a row takes when the multiples are refit 200 times on resampled live sets. A narrow range means the rank is stable; a wide one means it depends on which live tokens happen to be in the sample.</dd>
+      <dt>Leave-one-out</dt><dd>Each live protocol is scored as if it had no token — its own ratio left out of its category's multiple and of the global median — and the predicted value is compared with the market cap it actually trades at. The check is a ranking check: Spearman rho and top-decile hit.</dd>
+      <dt>Walk-forward</dt><dd>The multiples are learned only from the live protocols listed before a cut date, and scored on the ones listed after it. Three cuts: 2023-07-01, 2024-01-01, 2024-07-01.</dd>
+    </dl>
+  </section>
+</main>
+
+<footer>
+  <p>Token Radar radar-8. Built from the sealed snapshot only — no prices fetched live, no protocol names hard-coded into the model. The board, the multiples and every number on this page come from the same run.</p>
+</footer>
+
 <script src="../data.js"></script>
 <script src="app.js"></script>
 </body>
